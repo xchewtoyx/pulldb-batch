@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from functools import partial
 import json
 import logging
@@ -10,31 +10,63 @@ from pulldb.base import Route, TaskHandler, create_app
 from pulldb.models.admin import Setting
 from pulldb.models import comicvine
 from pulldb.models import issues
+from pulldb.models import volumes
 
 # pylint: disable=W0232,C0103,E1101,R0201,R0903
 
 class FetchNew(TaskHandler):
-    def get(self, shard_count=None, shard=None):
-        if not shard_count:
-            # When run from cron cycle over all issues
-            shard_count = 24 * 7
-            shard = datetime.today().hour + 24 * date.today().weekday()
+    def volume_list(self, issue_list):
+        volume_keys = [
+            self.volume_key(issue['volume']) for issue in issue_list
+        ]
+        volume_entries = ndb.get_multi(volume_keys)
+        return [volume.key.id() for volume in volume_entries if volume]
+
+    def volume_key(self, volume_id):
+        return ndb.Key(
+            volumes.Volume, str(volume_id)
+        )
+
+    def find_candidates(self, new_issues):
+        volume_list = self.volume_list(new_issues)
+        candidates = [
+            (issue, ndb.Key(
+                issues.Issue, str(issue['id']),
+                parent=self.volume_key(issue['volume'])
+            )) for issue in new_issues if str(issue['volume']) in volume_list
+        ]
+        # Pre-cache issues
+        ndb.get_multi_async(candidates)
+        return candidates, volume_list
+
+    def get(self):
         cv = comicvine.load()
-        query = issues.Issue.query(issues.Issue.shard == int(shard))
-        sharded_issues = [issue.key.id() for issue in query.fetch()]
-        updated_issues = []
-        for index in range(0, len(sharded_issues), 100):
-            ids = sharded_issues[index:min([len(sharded_issues), index+100])]
-            issue_page = cv.fetch_issue_batch(ids)
-            for issue in issue_page:
-                updated_issues.append(
-                    issues.issue_key(issue, create=False, reindex=True))
-        status = 'Updated %d issues' % len(updated_issues)
+        today = date.today()
+        yesterday = today - timedelta(1)
+        new_issues = cv.fetch_issue_batch(
+            [yesterday.isoformat(), today.isoformat()],
+            filter_attr='date_added'
+        )
+        candidates, volume_list = self.find_candidates(new_issues)
+        added_issues = []
+        skipped_issues = []
+        for issue, key in candidates:
+            issue = key.get()
+            if issue:
+                skipped_issues.append(key.id())
+                continue
+            if key.parent().id() in volume_list:
+                key = issues.issue_key(issue, key.parent())
+                added_issues.append(key.id())
+        status = 'New issues: %d added, %d skipped' % (
+            len(added_issues),
+            len(skipped_issues),
+        )
         logging.info(status)
         self.response.write(json.dumps({
             'status': 200,
             'message': status,
-            'updated': [issue.id() for issue in updated_issues],
+            'added': [issue for issue in added_issues],
         }))
 
 
@@ -101,6 +133,7 @@ class Validate(TaskHandler):
         }))
 
 app = create_app([
+    Route('/tasks/issues/fetchnew', FetchNew),
     Route('/tasks/issues/refresh', RefreshShard),
     Route('/tasks/issues/reshard', ReshardIssues),
     Route('/tasks/issues/validate', Validate),
