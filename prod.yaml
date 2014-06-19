@@ -1,21 +1,30 @@
 application: comic-pull-db
-module: api
+module: batch
 version: live
 runtime: python27
-instance_class: F1
+instance_class: B1
 api_version: 1
 threadsafe: true
-automatic_scaling:
-  min_idle_instances: 1
-  max_idle_instances: automatic  # default value
-  min_pending_latency: automatic  # default value
+basic_scaling:
+  max_instances: 2
+  idle_timeout: 5m
+
+builtins:
+- appstats: on
+
+libraries:
+- name: webapp2
+  version: latest
+- name: jinja2
+  version: latest
 
 handlers:
-- url: /api/issues/.*
-  script: api.issues.app
-- url: /api/pulls/.*
-  script: api.pulls.app
-- url: /api/subscriptions/.*
-  script: api.subscriptions.app
-- url: /api/volumes/.*
-  script: api.volumes.app
+- url: /tasks/issues/.*
+  script: tasks.issues.app
+  login: admin
+- url: /tasks/subscriptions/.*
+  script: tasks.subscriptions.app
+  login: admin
+- url: /tasks/volumes/.*
+  script: tasks.volumes.app
+  login: admin
