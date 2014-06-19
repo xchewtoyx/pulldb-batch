@@ -58,9 +58,10 @@ class FetchNew(TaskHandler):
             if key.parent().id() in volume_list:
                 key = issues.issue_key(issue, key.parent())
                 added_issues.append(key.id())
-        status = 'New issues: %d added, %d skipped' % (
+        status = 'New issues: %d found, %d added, %d skipped' % (
             len(added_issues),
             len(skipped_issues),
+            len(new_issues),
         )
         logging.info(status)
         self.response.write(json.dumps({
