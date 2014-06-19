@@ -1,0 +1,30 @@
+application: comic-pull-db
+module: batch
+version: rgh
+runtime: python27
+instance_class: B1
+api_version: 1
+threadsafe: true
+basic_scaling:
+  max_instances: 2
+  idle_timeout: 5m
+
+builtins:
+- appstats: on
+
+libraries:
+- name: webapp2
+  version: latest
+- name: jinja2
+  version: latest
+
+handlers:
+- url: /tasks/issues/.*
+  script: tasks.issues.app
+  login: admin
+- url: /tasks/subscriptions/.*
+  script: tasks.subscriptions.app
+  login: admin
+- url: /tasks/volumes/.*
+  script: tasks.volumes.app
+  login: admin
