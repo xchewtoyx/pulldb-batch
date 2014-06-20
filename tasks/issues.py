@@ -45,7 +45,8 @@ class FetchNew(TaskHandler):
         yesterday = today - timedelta(1)
         new_issues = cv.fetch_issue_batch(
             [yesterday.isoformat(), today.isoformat()],
-            filter_attr='date_added'
+            filter_attr='date_added',
+            deadline=60
         )
         candidates, volume_list = self.find_candidates(new_issues)
         added_issues = []
@@ -59,9 +60,9 @@ class FetchNew(TaskHandler):
                 key = issues.issue_key(issue, key.parent())
                 added_issues.append(key.id())
         status = 'New issues: %d found, %d added, %d skipped' % (
+            len(new_issues),
             len(added_issues),
             len(skipped_issues),
-            len(new_issues),
         )
         logging.info(status)
         self.response.write(json.dumps({
