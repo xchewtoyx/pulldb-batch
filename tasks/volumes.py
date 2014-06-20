@@ -4,6 +4,7 @@ import json
 import logging
 import math
 
+from google.appengine.api import search
 from google.appengine.ext import ndb
 
 # pylint: disable=F0401
@@ -79,6 +80,32 @@ class RefreshVolumes(TaskHandler):
             'message': status,
         }))
 
+class Reindex(TaskHandler):
+    def get(self):
+        query = volumes.Volume.query(
+            volumes.Volume.indexed == False
+        )
+        # index.put can only update 200 docs at a time
+        volumes_future = query.fetch_async(limit=200)
+        index = search.Index(name='volumes')
+        reindex_list = []
+        volume_list = []
+        for volume in volumes_future.get_result():
+            reindex_list.append(
+                volumes.index_volume(volume.key, volume, batch=True)
+            )
+            volume.indexed=True
+            volume_list.append(volume)
+        logging.info('Reindexing %d volumes', len(reindex_list))
+        if len(reindex_list):
+            try:
+                index.put(reindex_list)
+            except search.Error as error:
+                logging.error('index update failed: %r', error)
+                logging.exception(error)
+            else:
+                ndb.put_multi(volume_list)
+
 class ReshardVolumes(TaskHandler):
     @ndb.tasklet
     def reshard_task(self, shards, volume):
@@ -118,6 +145,7 @@ class Validate(TaskHandler):
 
 app = create_app([
     Route('/tasks/volumes/refresh', RefreshVolumes),
+    Route('/tasks/volumes/reindex', Reindex),
     Route('/tasks/volumes/reshard', ReshardVolumes),
     Route('/tasks/volumes/validate', Validate),
 ])

@@ -3,6 +3,7 @@ from functools import partial
 import json
 import logging
 
+from google.appengine.api import search
 from google.appengine.ext import ndb
 
 # pylint: disable=F0401
@@ -96,6 +97,32 @@ class RefreshShard(TaskHandler):
             'updated': [issue.id() for issue in updated_issues],
         }))
 
+class Reindex(TaskHandler):
+    def get(self):
+        query = issues.Issue.query(
+            issues.Issue.indexed == False,
+        )
+        # index.put can only handle 200 docs at a time
+        issues_future = query.fetch_async(limit=200)
+        index = search.Index(name='issues')
+        reindex_list = []
+        issue_list = []
+        for issue in issues_future.get_result():
+            reindex_list.append(
+                issues.index_issue(issue.key, issue, batch=True)
+            )
+            issue.indexed=True
+            issue_list.append(issue)
+        logging.info('Reindexing %d issues', len(issue_list))
+        if len(issue_list):
+            try:
+                index.put(reindex_list)
+            except search.Error as error:
+                logging.error('index update failed: %r', error)
+                logging.exception(error)
+            else:
+                ndb.put_multi(issue_list)
+
 class ReshardIssues(TaskHandler):
     @ndb.tasklet
     def reshard_task(self, shards, issue):
@@ -137,6 +164,7 @@ class Validate(TaskHandler):
 app = create_app([
     Route('/tasks/issues/fetchnew', FetchNew),
     Route('/tasks/issues/refresh', RefreshShard),
+    Route('/tasks/issues/reindex', Reindex),
     Route('/tasks/issues/reshard', ReshardIssues),
     Route('/tasks/issues/validate', Validate),
 ])
