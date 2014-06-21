@@ -2,12 +2,9 @@ application: comic-pull-db
 module: batch
 version: rgh
 runtime: python27
-instance_class: B1
+instance_class: F1
 api_version: 1
 threadsafe: true
-basic_scaling:
-  max_instances: 2
-  idle_timeout: 5m
 
 builtins:
 - appstats: on
@@ -21,6 +18,9 @@ libraries:
 handlers:
 - url: /tasks/issues/.*
   script: tasks.issues.app
+  login: admin
+- url: /tasks/pulls/.*
+  script: tasks.pulls.app
   login: admin
 - url: /tasks/subscriptions/.*
   script: tasks.subscriptions.app

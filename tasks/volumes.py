@@ -20,8 +20,11 @@ class RefreshVolumes(TaskHandler):
     @ndb.tasklet
     def volume_issues(self, volume):
         volume_issues = yield issues.Issue.query(
-            ancestor=volume.key).fetch_async()
-        issue_ids = [issue.identifier for issue in volume_issues]
+            issues.Issue.volume == volume.key
+        ).fetch_async()
+        issue_ids = [
+            issue.identifier for issue in volume_issues
+        ]
         raise ndb.Return({
             'volume': volume.identifier,
             'volume_key': volume.key,
@@ -31,12 +34,13 @@ class RefreshVolumes(TaskHandler):
     def fetch_issues(self, volume, limit=100):
         all_issues = volume.get('issues', [])
         if not all_issues:
-            last_page = math.ceil(1.0*volume['count_of_issues']/limit)
-            for page in range(int(last_page)):
-                issue_page = self.cv.fetch_issue_batch(
-                    [volume['id']], filter_attr='volume', page=page)
-                all_issues.extend(issue_page)
+            all_issues = self.cv.fetch_issue_batch(
+                    [volume['id']], filter_attr='volume'
+            )
         return all_issues
+
+    def filter_results(self, results, objtype=dict):
+        return [result for result in results if isinstance(result, objtype)]
 
     def get(self, shard_count=None, shard=None):
         # TODO(rgh): refactor this method
@@ -51,9 +55,7 @@ class RefreshVolumes(TaskHandler):
         )
         results = query.map(self.volume_issues)
         sharded_ids = [result['volume'] for result in results]
-        volume_detail = {}
-        for result in results:
-            volume_detail[result['volume']] = result
+        volume_detail = {result['volume']: result for result in results}
         cv_volumes = []
         for index in range(0, len(sharded_ids), 100):
             volume_page = sharded_ids[index:min(index+100, len(sharded_ids))]
@@ -62,8 +64,9 @@ class RefreshVolumes(TaskHandler):
             logging.debug('checking for new issues in %r', comicvine_volume)
             comicvine_id = comicvine_volume['id']
             comicvine_issues = self.fetch_issues(comicvine_volume)
+            comicvine_issues = self.filter_results(comicvine_issues)
             volume_detail[int(comicvine_id)]['cv_issues'] = comicvine_issues
-            volumes.volume_key(comicvine_volume, create=False, reindex=True)
+            volumes.volume_key(comicvine_volume, create=False)
         new_issues = []
         for detail in volume_detail.values():
             for issue in detail['cv_issues']:
@@ -92,7 +95,7 @@ class Reindex(TaskHandler):
         volume_list = []
         for volume in volumes_future.get_result():
             reindex_list.append(
-                volumes.index_volume(volume.key, volume, batch=True)
+                volume.index_document(batch=True)
             )
             volume.indexed=True
             volume_list.append(volume)

@@ -17,9 +17,15 @@ from pulldb.models import volumes
 
 class FetchNew(TaskHandler):
     def volume_list(self, issue_list):
-        volume_keys = [
-            self.volume_key(issue['volume']) for issue in issue_list
-        ]
+        logging.debug('Fetching volumes for issue list: %r', issue_list)
+        volume_keys = []
+        for issue in issue_list:
+            if not isinstance(issue, dict):
+                logging.warning('Invalid issue data: %r', issue)
+                continue
+            volume_keys.append(
+                volumes.volume_key(issue['volume'], create=False)
+            )
         volume_entries = ndb.get_multi(volume_keys)
         return [volume.key.id() for volume in volume_entries if volume]
 
@@ -30,14 +36,19 @@ class FetchNew(TaskHandler):
 
     def find_candidates(self, new_issues):
         volume_list = self.volume_list(new_issues)
-        candidates = [
-            (issue, ndb.Key(
-                issues.Issue, str(issue['id']),
-                parent=self.volume_key(issue['volume'])
-            )) for issue in new_issues if str(issue['volume']) in volume_list
-        ]
+        candidates = []
+        for issue in new_issues:
+            if isinstance(issue, dict):
+                candidates.append((
+                    issue,
+                    ndb.Key(
+                        issues.Issue, str(issue['id']),
+                        parent=self.volume_key(issue['volume'])
+                    ),
+                ))
+
         # Pre-cache issues
-        ndb.get_multi_async(candidates)
+        ndb.get_multi_async(key for issue, key in candidates)
         return candidates, volume_list
 
     def get(self):
@@ -49,6 +60,11 @@ class FetchNew(TaskHandler):
             filter_attr='date_added',
             deadline=60
         )
+        # Fixup for sometimes getting 'number_of_page_results' mixed into
+        # the results
+        new_issues = [
+            issue for issue in new_issues if isinstance(issue, dict)
+        ]
         candidates, volume_list = self.find_candidates(new_issues)
         added_issues = []
         skipped_issues = []
@@ -80,16 +96,24 @@ class RefreshShard(TaskHandler):
             shard_count = 24 * 7
             shard = datetime.today().hour + 24 * date.today().weekday()
         cv = comicvine.load()
-        query = issues.Issue.query(issues.Issue.shard == int(shard))
-        sharded_issues = [issue.key.id() for issue in query.fetch()]
+        query = issues.Issue.query(
+            issues.Issue.shard == int(shard),
+            issues.Issue.volume > None, # issue has volume
+        )
+        issue_list = query.fetch()
+        issue_ids = [issue.key.id() for issue in issue_list]
+        issue_map = {issue.key.id(): issue for issue in issue_list}
         updated_issues = []
-        for index in range(0, len(sharded_issues), 100):
-            ids = sharded_issues[index:min([len(sharded_issues), index+100])]
-            issue_page = cv.fetch_issue_batch(ids)
-            for issue in issue_page:
-                updated_issues.append(
-                    issues.issue_key(issue, create=False, reindex=True))
+        for index in range(0, len(issue_ids), 100):
+            ids = issue_ids[index:min([len(issue_ids), index+100])]
+            issue_details = cv.fetch_issue_batch(ids)
+            for issue_dict in issue_details:
+                issue = issue_map[issue_dict['id']]
+                if issue.has_updates(issue_dict):
+                    issue.apply_updates(issue_dict)
+                    updated_issues.append(issue)
         status = 'Updated %d issues' % len(updated_issues)
+        ndb.put_multi(updated_issues)
         logging.info(status)
         self.response.write(json.dumps({
             'status': 200,
@@ -109,7 +133,7 @@ class Reindex(TaskHandler):
         issue_list = []
         for issue in issues_future.get_result():
             reindex_list.append(
-                issues.index_issue(issue.key, issue, batch=True)
+                issue.index_document(batch=True)
             )
             issue.indexed=True
             issue_list.append(issue)
@@ -144,16 +168,27 @@ class ReshardIssues(TaskHandler):
             'message': '%d issues resharded' % len(results),
         }))
 
-class Validate(TaskHandler):
+class ValidateShard(TaskHandler):
     @ndb.tasklet
     def check_valid(self, issue):
         if issue.key.id() != str(issue.identifier):
             #return value is not used
             yield issue.key.delete_async()
             raise ndb.Return(True)
+        if not issue.volume:
+            query = issues.Issue.query(
+                issues.Issue.identifier == issue.identifier
+            )
+            candidates = yield query.fetch_async()
+            if len(candidates) > 1:
+                yield issue.key.delete_async()
+                raise ndb.Return(True)
 
     def get(self):
-        query = issues.Issue.query()
+        shard = datetime.today().hour + 24 * date.today().weekday()
+        query = issues.Issue.query(
+            issues.Issue.shard == int(shard)
+        )
         results = query.map(self.check_valid)
         deleted = sum(1 for deleted in results if deleted)
         self.response.write(json.dumps({
@@ -166,5 +201,5 @@ app = create_app([
     Route('/tasks/issues/refresh', RefreshShard),
     Route('/tasks/issues/reindex', Reindex),
     Route('/tasks/issues/reshard', ReshardIssues),
-    Route('/tasks/issues/validate', Validate),
+    Route('/tasks/issues/validate', ValidateShard),
 ])
