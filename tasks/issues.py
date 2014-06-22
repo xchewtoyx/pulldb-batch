@@ -110,7 +110,7 @@ class RefreshShard(TaskHandler):
             for issue_dict in issue_details:
                 issue = issue_map[issue_dict['id']]
                 if issue.has_updates(issue_dict):
-                    issue.apply_updates(issue_dict)
+                    issue.apply_changes(issue_dict)
                     updated_issues.append(issue)
         status = 'Updated %d issues' % len(updated_issues)
         ndb.put_multi(updated_issues)
@@ -118,7 +118,7 @@ class RefreshShard(TaskHandler):
         self.response.write(json.dumps({
             'status': 200,
             'message': status,
-            'updated': [issue.id() for issue in updated_issues],
+            'updated': [issue.key.id() for issue in updated_issues],
         }))
 
 class Reindex(TaskHandler):
