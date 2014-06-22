@@ -15,19 +15,16 @@ from pulldb.models import subscriptions
 class UpdateSubs(TaskHandler):
     @ndb.tasklet
     def locate_pulls(self, subscription, issue):
-        # this has already been cached, so no need to go async
-        query = pulls.Pull.query(
-            pulls.Pull.issue == issue.key,
-            pulls.Pull.subscription == subscription.key,
-        )
-        pull = yield query.get_async()
+        pull_key = pulls.pull_key(issue.key.id(), create=False)
+        pull = yield pull_key.get_async()
         if not pull:
-            raise ndb.Return(pulls.pull_key(issue))
+            raise ndb.Return(pull_key)
 
     @ndb.tasklet
     def check_pulls(self, subscription):
         issue_query = issues.Issue.query(
-            issues.Issue.volume == subscription.volume
+            issues.Issue.volume == subscription.volume,
+            issues.Issue.pubdate > subscription.start_date,
         )
         pull_callback = partial(self.locate_pulls, subscription)
         new_pulls = issue_query.map(pull_callback)

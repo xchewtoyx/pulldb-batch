@@ -17,15 +17,6 @@ class Validate(TaskHandler):
         if not issue:
             yield pull.key.delete_async()
             raise ndb.Return(True)
-        if pull.subscription:
-            legacy_key = ndb.Key(
-                pulls.Pull, pull.key.id(),
-                parent=pull.subscription
-            )
-            legacy_pull = yield legacy_key.get_async()
-            if legacy_pull:
-                yield legacy_key.delete_async()
-                raise ndb.Return(True)
 
     def get(self):
         query = pulls.Pull.query()
