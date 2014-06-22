@@ -15,7 +15,7 @@ class Validate(TaskHandler):
     def drop_invalid(self, pull):
         issue = yield pull.issue.get_async()
         if not issue:
-            yield subscription.key.delete_async()
+            yield pull.key.delete_async()
             raise ndb.Return(True)
         if pull.subscription:
             legacy_key = ndb.Key(

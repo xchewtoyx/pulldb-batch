@@ -196,7 +196,26 @@ class ValidateShard(TaskHandler):
             'deleted': deleted,
         }))
 
+class ConvertIssues(TaskHandler):
+    @ndb.tasklet
+    def convert_issue(self, issue):
+        if issue.json and not issue.volume:
+            issue_key = issues.issue_key(issue.json, issue.volume)
+            converted = yield issue_key.get_async()
+            if converted:
+                yield issue.key.delete_async()
+                raise ndb.Return(True)
+
+    def get(self):
+        query = issues.Issue.query()
+        converts = query.map(self.convert_issue, limit=100)
+        convert_count = sum(1 for convert in converts if convert)
+        self.response.write(json.dumps(
+            {'status': 200, 'count': convert_count,}
+        ))
+
 app = create_app([
+    Route('/tasks/issues/convert', ConvertIssues),
     Route('/tasks/issues/fetchnew', FetchNew),
     Route('/tasks/issues/refresh', RefreshShard),
     Route('/tasks/issues/reindex', Reindex),
