@@ -7,6 +7,7 @@ from google.appengine.ext import ndb
 from pulldb.base import create_app, Route, TaskHandler
 from pulldb.models.base import model_to_dict
 from pulldb.models import pulls
+from pulldb.models import streams
 from pulldb.models import subscriptions
 from pulldb.models import volumes
 
@@ -15,33 +16,35 @@ from pulldb.models import volumes
 class StreamSelect(TaskHandler):
     @ndb.tasklet
     def select_stream(self, pull):
-        stream_key = subscriptions.subscription_key(
-            'default', user=pull.key.parent()
-        )
-        publisher_query = streams.Stream.query(
-            streams.Stream.publisher == pull.publisher,
-            ancestor=pull.key.parent()
-        )
-        volume_query = streams.Stream.query(
-            streams.Stream.volume == pull.volume,
-            ancestor=pull.key.parent()
-        )
+        stream_key = None
         issue_query = streams.Stream.query(
-            streams.Stream.issue == pull.issue,
+            streams.Stream.issues == pull.issue,
             ancestor=pull.key.parent()
         )
-        pub_stream, vol_stream, issue_stream = yield (
-            publisher_query.get_async(),
-            volume_query.get_async(),
-            issue_query.get_async(),
-        )
+        issue_stream = yield issue_query.get_async()
         if issue_stream:
             stream_key = issue_stream.key
-        elif vol_stream:
-            stream_key = vol_stream.key
-        elif pub_stream:
-            stream_key = pub_stream.key
-        if pull.stream != stream_key:
+        if not stream_key:
+            volume_query = streams.Stream.query(
+                streams.Stream.volumes == pull.volume,
+                ancestor=pull.key.parent()
+            )
+            volume_stream = yield volume_query.get_async()
+            if volume_stream:
+                stream_key = volume_stream.key
+        if not stream_key:
+            publisher_query = streams.Stream.query(
+                streams.Stream.publishers == pull.publisher,
+                ancestor=pull.key.parent()
+            )
+            publisher_stream = yield publisher_query.get_async()
+            if publisher_stream:
+                stream_key = publisher_stream.key
+        if not stream_key:
+            stream_key = streams.stream_key(
+                'default', user_key=pull.key.parent(), create=False
+            )
+        if stream_key and pull.stream != stream_key:
             pull.stream = stream_key
             yield pull.put_async()
             raise ndb.Return(True)
