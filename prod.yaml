@@ -22,6 +22,12 @@ handlers:
 - url: /tasks/issues/.*
   script: tasks.issues.app
   login: admin
+- url: /tasks/pulls/.*
+  script: tasks.pulls.app
+  login: admin
+- url: /tasks/streams/.*
+  script: tasks.streams.app
+  login: admin
 - url: /tasks/subscriptions/.*
   script: tasks.subscriptions.app
   login: admin

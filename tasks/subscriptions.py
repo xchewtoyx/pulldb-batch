@@ -16,7 +16,7 @@ class UpdateSubs(TaskHandler):
     @ndb.tasklet
     def locate_pulls(self, subscription, issue):
         pull_key = pulls.pull_key(
-            issue.key.id(), user_key=subscription.key.parent(), create=False
+            issue.key.id(), user=subscription.key.parent(), create=False
         )
         pull = yield pull_key.get_async()
         if not pull:
