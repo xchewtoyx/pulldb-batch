@@ -102,7 +102,7 @@ class RefreshShard(TaskHandler):
         )
         issue_list = query.fetch()
         issue_ids = [issue.key.id() for issue in issue_list]
-        issue_map = {issue.key.id(): issue for issue in issue_list}
+        issue_map = {issue.identifier: issue for issue in issue_list}
         updated_issues = []
         for index in range(0, len(issue_ids), 100):
             ids = issue_ids[index:min([len(issue_ids), index+100])]
