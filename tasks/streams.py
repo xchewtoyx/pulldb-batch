@@ -57,7 +57,7 @@ class StreamWeights(TaskHandler):
     def get(self):
         query = streams.Stream.query()
         update_list = query.map(self.update_weight)
-        updated = sum(count for count in update_list if pull)
+        updated = sum(count for count in update_list if count)
         message = 'Updated weights for %d pulls in %d streams' % (
             updated, len(update_list),
         )
