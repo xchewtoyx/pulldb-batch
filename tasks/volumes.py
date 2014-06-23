@@ -61,6 +61,8 @@ class RefreshVolumes(TaskHandler):
             volume_page = sharded_ids[index:min(index+100, len(sharded_ids))]
             cv_volumes.extend(self.cv.fetch_volume_batch(volume_page))
         for comicvine_volume in cv_volumes:
+            if not comicvine_volume.get('date_last_updated'):
+                comicvine_volume['date_last_updated'] = date.today().isoformat()
             logging.debug('checking for new issues in %r', comicvine_volume)
             comicvine_id = comicvine_volume['id']
             comicvine_issues = self.fetch_issues(comicvine_volume)
