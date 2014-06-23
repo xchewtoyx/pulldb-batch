@@ -50,7 +50,7 @@ class StreamWeights(TaskHandler):
         ).order(pulls.Pull.pubdate).fetch_async()
         stream_len = len(stream_pulls)
         for index, pull in enumerate(stream_pulls):
-            pull.weight = float(index) / stream.count
+            pull.weight = float(index) / stream.length
         yield ndb.put_multi_async(stream_pulls)
         raise ndb.Return(stream_len)
 
