@@ -58,9 +58,12 @@ class UpdateSubs(TaskHandler):
             pull_query.fetch_async(),
         )
         pulled_issues = [pull.issue for pull in pull_list]
+        new_pulls = []
         for issue in issue_list:
             if issue not in pulled_issues:
-                raise ndb.Return(issue, subscription)
+                new_pulls.append((issue, subscription))
+        if new_pulls:
+            raise ndb.Return(new_pulls)
 
     def get(self):
         shard = datetime.now().hour
@@ -71,7 +74,10 @@ class UpdateSubs(TaskHandler):
             subscriptions.Subscription.shard == shard,
         )
         pull_list = query.map(self.check_pulls)
-        candidates = [pull for pull in pull_list if pull]
+        candidates = []
+        for subscription_pulls in pull_list:
+            if subscription_pulls:
+                candidates.extend(subscription_pulls)
         logging.info('adding %d pulls', len(candidates))
         new_pulls = []
         for issue, subscription in candidates:
@@ -79,6 +85,7 @@ class UpdateSubs(TaskHandler):
             new_pulls.append(
                 pulls.pull_key(issue, user=user_key, create=True, batch=True)
             )
+        logging.debug('Adding pulls: %r', new_pulls)
         ndb.put_multi(new_pulls)
         self.response.write(json.dumps({
             'status': 200,
