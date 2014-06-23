@@ -45,41 +45,44 @@ class ReshardSubs(TaskHandler):
 
 class UpdateSubs(TaskHandler):
     @ndb.tasklet
-    def locate_pulls(self, subscription, issue):
-        issue_key = issue.key
-        user_key = subscription.key.parent()
-        pull_key = pulls.pull_key(issue_key, user=user_key, create=False)
-        pull = yield pull_key.get_async()
-        if not pull:
-            pull = pulls.pull_key(
-                    issue_key, user=user_key, create=True, batch=True
-            )
-            raise ndb.Return(pull)
-
-    @ndb.tasklet
     def check_pulls(self, subscription):
         issue_query = issues.Issue.query(
             issues.Issue.volume == subscription.volume,
             issues.Issue.pubdate > subscription.start_date,
         )
-        pull_callback = partial(self.locate_pulls, subscription)
-        new_pulls = issue_query.map(pull_callback)
-        new_pulls = [pull for pull in new_pulls if pull]
-        if new_pulls:
-            logging.info('Adding %d new pulls for sub %r',
-                         len(new_pulls), subscription.key)
-            yield ndb.put_multi_async(new_pulls)
-        raise ndb.Return(new_pulls)
+        pull_query = pulls.Pull.query(
+            pulls.Pull.subscription == subscription.key,
+        )
+        issue_list, pull_list = yield (
+            issue_query.fetch_async(keys_only=True),
+            pull_query.fetch_async(),
+        )
+        pulled_issues = [pull.issue for pull in pull_list]
+        for issue in issue_list:
+            if issue not in pulled_issues:
+                raise ndb.Return(issue, subscription)
 
     def get(self):
-        current_shard = datetime.now().hour
+        shard = datetime.now().hour
+        if self.request.get('shard'):
+            shard = int(self.request.get('shard'))
+        logging.info('Updating subscription shard %d' % shard)
         query = subscriptions.Subscription.query(
-            subscriptions.Subscription.shard == current_shard,
+            subscriptions.Subscription.shard == shard,
         )
-        updates = query.map(self.check_pulls)
+        pull_list = query.map(self.check_pulls)
+        candidates = [pull for pull in pull_list if pull]
+        logging.info('adding %d pulls', len(candidates))
+        new_pulls = []
+        for issue, subscription in candidates:
+            user_key = subscription.key.parent()
+            new_pulls.append(
+                pulls.pull_key(issue, user=user_key, create=True, batch=True)
+            )
+        ndb.put_multi(new_pulls)
         self.response.write(json.dumps({
             'status': 200,
-            'updated': len(updates),
+            'updated': len(new_pulls),
         }))
 
 class Validate(TaskHandler):
