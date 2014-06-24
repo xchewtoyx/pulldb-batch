@@ -51,10 +51,10 @@ class StreamWeights(TaskHandler):
             pulls.Pull.read == False,
             ancestor=stream.key.parent(),
         ).order(pulls.Pull.pubdate).fetch_async()
-        stream_len = len(stream_pulls)
         changed = []
+        stream_len = max([stream.length, 1])
         for index, pull in enumerate(stream_pulls):
-            weight = float(index + 1) / stream.length
+            weight = float(index) / stream_length
             if pull.weight != weight:
                 pull.weight = weight
                 changed.append(pull)
