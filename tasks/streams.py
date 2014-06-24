@@ -45,17 +45,21 @@ class StreamWeights(TaskHandler):
 
     @ndb.tasklet
     def update_weight(self, stream):
-        stream_pulls = pulls.Pull.query(
+        stream_pulls = yield pulls.Pull.query(
             pulls.Pull.stream == stream.key,
             pulls.Pull.pulled == True,
             pulls.Pull.read == False,
             ancestor=stream.key.parent(),
-        ).order(pulls.Pull.pubdate).fetch()
+        ).order(pulls.Pull.pubdate).fetch_async()
         stream_len = len(stream_pulls)
+        changed = []
         for index, pull in enumerate(stream_pulls):
-            pull.weight = float(index) / stream.length
-        yield ndb.put_multi_async(stream_pulls)
-        raise ndb.Return(stream_len)
+            weight = float(index) / stream.length
+            if pull.weight != weight:
+                pull.weight = weight
+                changed.append(pull)
+        yield ndb.put_multi_async(changed)
+        raise ndb.Return(len(changed))
 
     def get(self):
         query = streams.Stream.query()
