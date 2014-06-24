@@ -40,14 +40,17 @@ class StreamTotals(TaskHandler):
         }))
 
 class StreamWeights(TaskHandler):
+    def pull_key(self, pull):
+        return pull.pubdate
+
     @ndb.tasklet
     def update_weight(self, stream):
-        stream_pulls = yield pulls.Pull.query(
+        stream_pulls = pulls.Pull.query(
             pulls.Pull.stream == stream.key,
             pulls.Pull.pulled == True,
             pulls.Pull.read == False,
             ancestor=stream.key.parent(),
-        ).order(pulls.Pull.pubdate).fetch_async()
+        ).order(pulls.Pull.pubdate).fetch()
         stream_len = len(stream_pulls)
         for index, pull in enumerate(stream_pulls):
             pull.weight = float(index) / stream.length

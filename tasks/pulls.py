@@ -111,6 +111,7 @@ class Refresh(TaskHandler):
     def refresh_pull(self, pull):
         changed = False
         issue = yield pull.issue.get_async()
+        logging.debug('checking pull %r', pull.key)
         if not pull.volume:
             logging.info('Adding missing volume to pull %r', pull.key)
             pull.volume = issue.volume
@@ -149,9 +150,12 @@ class Refresh(TaskHandler):
 
     def get(self):
         shard = datetime.now().hour
+        if self.request.get('shard'):
+            shard = int(self.request.get('shard'))
         query = pulls.Pull.query(
             pulls.Pull.shard == shard
         )
+        logging.info('Refreshing pulls in shard %d', shard)
         results = query.map(self.refresh_pull)
         update_count = sum(1 for pull in results if pull)
         message = '%d of %d pulls refreshed' % (update_count, len(results))
