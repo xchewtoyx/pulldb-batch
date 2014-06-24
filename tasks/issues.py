@@ -17,11 +17,11 @@ from pulldb.models import volumes
 
 class FetchNew(TaskHandler):
     def volume_list(self, issue_list):
-        logging.debug('Fetching volumes for issue list: %r', issue_list)
+        logging.info('Fetching volumes for issue list: %r', issue_list)
         volume_keys = []
         for issue in issue_list:
             if not isinstance(issue, dict):
-                logging.warning('Invalid issue data: %r', issue)
+                logging.warn('Invalid issue data: %r', issue)
                 continue
             volume_keys.append(
                 volumes.volume_key(issue['volume'], create=False)
@@ -29,28 +29,22 @@ class FetchNew(TaskHandler):
         volume_entries = ndb.get_multi(volume_keys)
         return [volume.key.id() for volume in volume_entries if volume]
 
-    def volume_key(self, volume_id):
-        return ndb.Key(
-            volumes.Volume, str(volume_id)
-        )
-
     def find_candidates(self, new_issues):
         volume_list = self.volume_list(new_issues)
         candidates = []
         for issue in new_issues:
             if isinstance(issue, dict):
-                candidates.append((
-                    issue,
-                    ndb.Key(
-                        issues.Issue, str(issue['id']),
-                        parent=self.volume_key(issue['volume'])
-                    ),
-                ))
+                issue_key = issues.issue_key(str(issue['id']), create=False)
+                volume_key = volumes.volume_key(issue['volume'], create=False)
+                candidates.append(
+                    (issue, issue_key, volume_key)
+                )
 
         # Pre-cache issues
-        ndb.get_multi_async(key for issue, key in candidates)
+        ndb.get_multi_async(key for issue, key, volume in candidates)
         return candidates, volume_list
 
+    @ndb.toplevel
     def get(self):
         cv = comicvine.load()
         today = date.today()
@@ -68,14 +62,15 @@ class FetchNew(TaskHandler):
         candidates, volume_list = self.find_candidates(new_issues)
         added_issues = []
         skipped_issues = []
-        for issue, key in candidates:
+        for issue_dict, key, volume in candidates:
             issue = key.get()
             if issue:
                 skipped_issues.append(key.id())
                 continue
-            if key.parent().id() in volume_list:
-                key = issues.issue_key(issue, key.parent())
-                added_issues.append(key.id())
+            if volume.id() in volume_list:
+                issue = issues.issue_key(
+                    issue_dict, volume, create=True, batch=True)
+                added_issues.append(issue)
         status = 'New issues: %d found, %d added, %d skipped' % (
             len(new_issues),
             len(added_issues),
@@ -85,9 +80,7 @@ class FetchNew(TaskHandler):
         self.response.write(json.dumps({
             'status': 200,
             'message': status,
-            'added': [issue for issue in added_issues],
         }))
-
 
 class RefreshShard(TaskHandler):
     def get(self, shard_count=None, shard=None):
@@ -118,7 +111,6 @@ class RefreshShard(TaskHandler):
         self.response.write(json.dumps({
             'status': 200,
             'message': status,
-            'updated': [issue.key.id() for issue in updated_issues],
         }))
 
 class Reindex(TaskHandler):
