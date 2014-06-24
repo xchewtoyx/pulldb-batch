@@ -122,6 +122,11 @@ class Refresh(TaskHandler):
                          issue.pubdate.isoformat())
             pull.pubdate = issue.pubdate
             changed = True
+        if pull.name != issue.name:
+            logging.info('Updating name for pull %r (%s->%s)',
+                         pull.key, pull.name, issue.name)
+            pull.name = issue.name
+            changed = True
         if pull.volume and not pull.subscription:
             logging.info('Adding missing subscription to pull %r', pull.key)
             query = subscriptions.Subscription.query(
