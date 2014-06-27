@@ -50,7 +50,7 @@ class RefreshVolumes(TaskHandler):
             shard_count = 24 * 7
             shard = datetime.today().hour + 24 * date.today().weekday()
         else:
-            shard = int(self.request.get('shard')
+            shard = int(self.request.get('shard'))
         self.cv = comicvine.load()
         query = volumes.Volume.query(
             volumes.Volume.shard == int(shard)
