@@ -42,13 +42,15 @@ class RefreshVolumes(TaskHandler):
     def filter_results(self, results, objtype=dict):
         return [result for result in results if isinstance(result, objtype)]
 
-    def get(self, shard_count=None, shard=None):
+    def get(self):
         # TODO(rgh): refactor this method
         # pylint: disable=R0914
-        if not shard_count:
+        if not self.request.get('shard'):
             # When run from cron cycle over all issues weekly
             shard_count = 24 * 7
             shard = datetime.today().hour + 24 * date.today().weekday()
+        else:
+            shard = int(self.request.get('shard')
         self.cv = comicvine.load()
         query = volumes.Volume.query(
             volumes.Volume.shard == int(shard)
