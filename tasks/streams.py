@@ -54,7 +54,7 @@ class StreamWeights(TaskHandler):
         changed = []
         stream_length = max([stream.length, 1])
         for index, pull in enumerate(stream_pulls):
-            weight = float(index) / stream_length
+            weight = (index + 0.5) / stream_length
             if pull.weight != weight:
                 pull.weight = weight
                 changed.append(pull)
