@@ -42,7 +42,7 @@ class RefreshVolumes(TaskHandler):
     def filter_results(self, results, objtype=dict):
         return [result for result in results if isinstance(result, objtype)]
 
-    def get(self):
+    def get(self, *args):
         # TODO(rgh): refactor this method
         # pylint: disable=R0914
         if not self.request.get('shard'):
@@ -151,7 +151,7 @@ class Validate(TaskHandler):
         }))
 
 app = create_app([
-    Route('/tasks/volumes/refresh', RefreshVolumes),
+    Route('/<:batch|tasks>/volumes/refresh', RefreshVolumes),
     Route('/tasks/volumes/reindex', Reindex),
     Route('/tasks/volumes/reshard', ReshardVolumes),
     Route('/tasks/volumes/validate', Validate),

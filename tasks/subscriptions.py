@@ -65,7 +65,7 @@ class UpdateSubs(TaskHandler):
         if new_pulls:
             raise ndb.Return(new_pulls)
 
-    def get(self):
+    def get(self, request_type=None):
         shard = datetime.now().hour
         if self.request.get('shard'):
             shard = int(self.request.get('shard'))
@@ -113,6 +113,6 @@ class Validate(TaskHandler):
 
 app = create_app([
     Route('/tasks/subscriptions/reshard', ReshardSubs),
-    Route('/tasks/subscriptions/update', UpdateSubs),
+    Route('/<:batch|tasks>/subscriptions/update', UpdateSubs),
     Route('/tasks/subscriptions/validate', Validate),
 ])

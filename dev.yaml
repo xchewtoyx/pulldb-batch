@@ -28,6 +28,10 @@ handlers:
 - url: /tasks/subscriptions/.*
   script: tasks.subscriptions.app
   login: admin
+- url: /batch/subscriptions/.*
+  script: tasks.subscriptions.app
 - url: /tasks/volumes/.*
   script: tasks.volumes.app
   login: admin
+- url: /batch/volumes/.*
+  script: tasks.volumes.app
