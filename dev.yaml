@@ -22,6 +22,8 @@ handlers:
 - url: /tasks/pulls/.*
   script: tasks.pulls.app
   login: admin
+- url: /batch/pulls/.*
+  script: tasks.pulls.app
 - url: /tasks/streams/.*
   script: tasks.streams.app
   login: admin

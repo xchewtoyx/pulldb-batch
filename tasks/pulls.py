@@ -86,7 +86,7 @@ class StreamSelect(TaskHandler):
             yield pull.put_async()
             raise ndb.Return(True)
 
-    def get(self):
+    def get(self, *args):
         shard = datetime.now().hour
         if self.request.get('shard'):
             shard = int(self.request.get('shard'))
@@ -190,7 +190,7 @@ class Validate(TaskHandler):
         }))
 
 app = create_app([
-    Route('/tasks/pulls/update/streams', StreamSelect),
+    Route('/<:batch|tasks>/pulls/update/streams', StreamSelect),
     Route('/tasks/pulls/refresh', Refresh),
     Route('/tasks/pulls/reshard', ReshardPulls),
     Route('/tasks/pulls/validate', Validate),
