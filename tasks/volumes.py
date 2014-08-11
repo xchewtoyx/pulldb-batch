@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import partial
 import json
 import logging
@@ -12,6 +12,7 @@ from pulldb.base import create_app, Route, TaskHandler
 from pulldb.models.admin import Setting
 from pulldb.models import comicvine
 from pulldb.models import issues
+from pulldb.models import subscriptions
 from pulldb.models import volumes
 
 # pylint: disable=W0232,C0103,E1101,R0201,R0903,W0201
@@ -26,9 +27,9 @@ class RefreshVolumes(TaskHandler):
             issue.identifier for issue in volume_issues
         ]
         raise ndb.Return({
-            'volume': volume.identifier,
+            'volume_id': volume.identifier,
             'volume_key': volume.key,
-            'ds_issues': issue_ids,
+            'issue_ids': issue_ids,
         })
 
     def fetch_issues(self, volume, limit=100):
@@ -42,22 +43,39 @@ class RefreshVolumes(TaskHandler):
     def filter_results(self, results, objtype=dict):
         return [result for result in results if isinstance(result, objtype)]
 
-    def get(self, *args):
+    def shard_filter(self, shard_type):
+        if shard_type == 'active':
+            # For active volumes check for updates daily
+            shard = datetime.today().hour
+            # Consider anything with an issue within past 6 months as active
+            logmsg = 'Refreshing active volumes shard %s'
+        else:
+            # Check weekly for all volumes
+            shard = datetime.today().hour + 24 * date.today().weekday()
+            logmsg = 'Refreshing all volumes shard %s'
+        if self.request.get('shard'):
+            shard = int(self.request.get('shard'))
+        logging.info(logmsg, shard)
+        if shard_type == 'active':
+            active_threshold = datetime.today() - timedelta(182)
+            shard_filter = ndb.AND(
+                volumes.Volume.fast_shard == int(shard),
+                volumes.Volume.last_issue_date >= active_threshold,
+            )
+        else:
+            shard_filter = volumes.Volume.shard == int(shard)
+        return shard_filter
+
+    @ndb.toplevel
+    def get(self, shard_type='complete', *args):
         # TODO(rgh): refactor this method
         # pylint: disable=R0914
-        if not self.request.get('shard'):
-            # When run from cron cycle over all issues weekly
-            shard_count = 24 * 7
-            shard = datetime.today().hour + 24 * date.today().weekday()
-        else:
-            shard = int(self.request.get('shard'))
+        logging.info('Args: %r %r', shard_type, args)
         self.cv = comicvine.load()
-        query = volumes.Volume.query(
-            volumes.Volume.shard == int(shard)
-        )
+        query = volumes.Volume.query(self.shard_filter(shard_type))
         results = query.map(self.volume_issues)
-        sharded_ids = [result['volume'] for result in results]
-        volume_detail = {result['volume']: result for result in results}
+        sharded_ids = [result['volume_id'] for result in results]
+        volume_detail = {result['volume_id']: result for result in results}
         cv_volumes = []
         for index in range(0, len(sharded_ids), 100):
             volume_page = sharded_ids[index:min(index+100, len(sharded_ids))]
@@ -70,14 +88,41 @@ class RefreshVolumes(TaskHandler):
             comicvine_issues = self.fetch_issues(comicvine_volume)
             comicvine_issues = self.filter_results(comicvine_issues)
             volume_detail[int(comicvine_id)]['cv_issues'] = comicvine_issues
+            volume_detail[int(comicvine_id)]['volume_detail'] = comicvine_volume
             volumes.volume_key(comicvine_volume, create=False)
         new_issues = []
         for detail in volume_detail.values():
             for issue in detail['cv_issues']:
-                if int(issue['id']) not in detail['ds_issues']:
+                if int(issue['id']) not in detail['issue_ids']:
                     new_issues.append((issue, detail['volume_key']))
         for issue, volume_key in new_issues:
             issues.issue_key(issue, volume_key=volume_key)
+        for volume_id in volume_detail:
+            volume_key = ndb.Key('Volume', str(volume_id))
+            logging.info('updating volume: %r' % volume_key)
+            volume_data = volume_detail[volume_id]['volume_detail']
+            try:
+                last_issue_key = ndb.Key(
+                    'Issue', str(volume_data['last_issue']['id'])
+                )
+            except KeyError:
+                logging.info(
+                    'Cannot update last issue data for %r, %r',
+                    volume_id, volume_data
+                )
+                continue
+            volume = volume_key.get()
+            if volume and (
+                    volume.last_issue != last_issue_key or
+                    not volume.last_issue_date
+            ):
+                last_issue = last_issue_key.get()
+                volume.last_issue = last_issue_key
+                volume.last_issue_date = last_issue.pubdate
+                volume.put_async()
+            else:
+                logging.info('not updating %r with %r',
+                             volume_key, volume_data)
         status = 'Updated %d volumes. Found %d new issues' % (
             len(sharded_ids), len(new_issues)
         )
@@ -116,6 +161,7 @@ class Reindex(TaskHandler):
 class ReshardVolumes(TaskHandler):
     @ndb.tasklet
     def reshard_task(self, shards, volume):
+        volume.fast_shard = volume.identifier % 24
         volume.shard = volume.identifier % shards
         result = yield volume.put_async()
         raise ndb.Return(result)
@@ -151,7 +197,14 @@ class Validate(TaskHandler):
         }))
 
 app = create_app([
-    Route('/<:batch|tasks>/volumes/refresh', RefreshVolumes),
+    Route(
+        '/<:batch|tasks>/volumes/refresh',
+        RefreshVolumes
+    ),
+    Route(
+        '/<:batch|tasks>/volumes/refresh/<shard_type:(active)>',
+        RefreshVolumes
+    ),
     Route('/tasks/volumes/reindex', Reindex),
     Route('/tasks/volumes/reshard', ReshardVolumes),
     Route('/tasks/volumes/validate', Validate),
