@@ -114,11 +114,16 @@ class RefreshVolumes(TaskHandler):
             volume = volume_key.get()
             if volume and (
                     volume.last_issue != last_issue_key or
-                    not volume.last_issue_date
-            ):
+                    not volume.last_issue_date):
                 last_issue = last_issue_key.get()
                 volume.last_issue = last_issue_key
-                volume.last_issue_date = last_issue.pubdate
+                try:
+                    volume.last_issue_date = last_issue.pubdate
+                except AttributeError:
+                    logging.warn(
+                        'Cannot update volume %r, last issue %r has no pubdate',
+                        volume, last_issue
+                    )
                 volume.put_async()
             else:
                 logging.info('not updating %r with %r',
