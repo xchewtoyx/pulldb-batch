@@ -1,0 +1,5 @@
+{
+  "phabricator.uri" : "http:\/\/phabricator.big-tr.uk:8000/",
+  "repository.callsign" : "PDBTASK",
+  "unit.engine" : "NoseTestEngine"
+}

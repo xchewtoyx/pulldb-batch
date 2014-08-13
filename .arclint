@@ -1,0 +1,8 @@
+{
+  "linters": {
+    "pylint": {
+      "type": "pep8",
+      "include": "(\\.py$)"
+    }
+  }
+}
