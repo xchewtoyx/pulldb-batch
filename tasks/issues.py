@@ -83,10 +83,9 @@ class FetchNew(TaskHandler):
         }))
 
 class RefreshShard(TaskHandler):
-    def get(self, shard_count=None, shard=None):
-        if not shard_count:
-            # When run from cron cycle over all issues
-            shard_count = 24 * 7
+    def get(self):
+        shard = self.request.get('shard')
+        if not shard:
             shard = datetime.today().hour + 24 * date.today().weekday()
         cv = comicvine.load()
         query = issues.Issue.query(
