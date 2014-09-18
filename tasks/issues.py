@@ -206,6 +206,25 @@ class ConvertIssues(TaskHandler):
             {'status': 200, 'count': convert_count,}
         ))
 
+
+class FixVolumeKey(TaskHandler):
+    @ndb.tasklet
+    def check_type(self, issue):
+        if not isinstance(issue.volume.id(), basestring):
+            logging.debug('Volume id type: %r', type(issue.volume.id()))
+            issue.volume = ndb.Key('Volume', str(issue.volume.id()))
+            yield issue.put_async()
+            raise ndb.Return(True)
+
+    def get(self):
+        shard = int(self.request.get('shard', 0))
+        query = issues.Issue.query(issues.Issue.shard == shard)
+        fixed = query.map(self.check_type)
+        fixed_count = sum([1 for state in fixed if state])
+        self.response.write(json.dumps(
+            {'status': 200, 'count': fixed_count, 'total': len(fixed)}))
+
+
 app = create_app([
     Route('/tasks/issues/convert', ConvertIssues),
     Route('/tasks/issues/fetchnew', FetchNew),
@@ -213,4 +232,5 @@ app = create_app([
     Route('/tasks/issues/reindex', Reindex),
     Route('/tasks/issues/reshard', ReshardIssues),
     Route('/tasks/issues/validate', ValidateShard),
+    Route('/tasks/issues/fixvolumekey', FixVolumeKey),
 ])
