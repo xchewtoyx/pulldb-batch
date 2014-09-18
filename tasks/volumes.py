@@ -39,7 +39,7 @@ class RefreshVolumes(TaskHandler):
                 all_issues = self.cv.fetch_issue_batch(
                     [volume['id']], filter_attr='volume'
                 )
-            except Exception as error:
+            except Exception as error: #TODO(rgh): Remove blanket catch
                 logging.exception(error)
         return all_issues
 
