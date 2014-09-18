@@ -35,9 +35,12 @@ class RefreshVolumes(TaskHandler):
     def fetch_issues(self, volume, limit=100):
         all_issues = volume.get('issues', [])
         if not all_issues:
-            all_issues = self.cv.fetch_issue_batch(
+            try:
+                all_issues = self.cv.fetch_issue_batch(
                     [volume['id']], filter_attr='volume'
-            )
+                )
+            except Exception as error:
+                logging.exception(error)
         return all_issues
 
     def filter_results(self, results, objtype=dict):
@@ -79,7 +82,10 @@ class RefreshVolumes(TaskHandler):
         cv_volumes = []
         for index in range(0, len(sharded_ids), 100):
             volume_page = sharded_ids[index:min(index+100, len(sharded_ids))]
-            cv_volumes.extend(self.cv.fetch_volume_batch(volume_page))
+            try:
+                cv_volumes.extend(self.cv.fetch_volume_batch(volume_page))
+            except Exception as error:
+                logging.exception(error)
         for comicvine_volume in cv_volumes:
             if not comicvine_volume.get('date_last_updated'):
                 comicvine_volume['date_last_updated'] = date.today().isoformat()
@@ -201,6 +207,40 @@ class Validate(TaskHandler):
             'deleted': deleted,
         }))
 
+
+class FixIssueKeys(TaskHandler):
+    @ndb.tasklet
+    def check_type(self, volume):
+        changed = False
+        if volume.first_issue and not isinstance(
+                volume.first_issue.id(), basestring):
+            volume.first_issue = ndb.Key('Issue', str(volume.first_issue.id()))
+            changed = True
+        if volume.last_issue and not isinstance(
+                volume.last_issue.id(), basestring):
+            volume.last_issue = ndb.Key('Issue', str(volume.last_issue.id()))
+            changed = True
+        if changed:
+            yield volume.put_async()
+        else:
+            try:
+                logging.debug('unchanged: %r %r',
+                              type(volume.first_issue.id()),
+                              type(volume.last_issue.id()))
+            except:
+                pass
+        raise ndb.Return(changed)
+
+    def get(self):
+        query = volumes.Volume.query()
+        fixed = query.map(self.check_type)
+        fixed_count = sum([1 for state in fixed if state])
+        self.response.write(json.dumps({
+            'status': 200,
+            'total': len(fixed),
+            'fixed': fixed_count}))
+
+
 app = create_app([
     Route(
         '/<:batch|tasks>/volumes/refresh',
@@ -213,4 +253,5 @@ app = create_app([
     Route('/tasks/volumes/reindex', Reindex),
     Route('/tasks/volumes/reshard', ReshardVolumes),
     Route('/tasks/volumes/validate', Validate),
+    Route('/tasks/volumes/fixissuekeys', FixIssueKeys),
 ])
