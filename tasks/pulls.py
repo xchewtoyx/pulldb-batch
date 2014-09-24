@@ -164,11 +164,11 @@ class Refresh(TaskHandler):
         results = query.map(self.refresh_pull)
         update_count = sum(1 for pull in results if pull)
         message = '%d of %d pulls refreshed' % (update_count, len(results))
-        self.response.write({
+        self.response.write(json.dumps({
             'status': 200,
             'message': ' refreshed',
             'results': [pull for pull in results if pull],
-        })
+        }))
 
 class Validate(TaskHandler):
     @ndb.tasklet
