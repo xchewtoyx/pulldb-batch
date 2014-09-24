@@ -83,7 +83,7 @@ class FetchNew(TaskHandler):
         }))
 
 class RefreshShard(TaskHandler):
-    def get(self):
+    def get(self, *args):
         shard = self.request.get('shard')
         if not shard:
             shard = datetime.today().hour + 24 * date.today().weekday()
@@ -227,7 +227,7 @@ class FixVolumeKey(TaskHandler):
 app = create_app([
     Route('/tasks/issues/convert', ConvertIssues),
     Route('/tasks/issues/fetchnew', FetchNew),
-    Route('/tasks/issues/refresh', RefreshShard),
+    Route('/<:batch|tasks>/issues/refresh', RefreshShard),
     Route('/tasks/issues/reindex', Reindex),
     Route('/tasks/issues/reshard', ReshardIssues),
     Route('/tasks/issues/validate', ValidateShard),
