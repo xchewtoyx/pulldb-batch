@@ -101,7 +101,8 @@ class RefreshShard(TaskHandler):
             issue_details = cv.fetch_issue_batch(ids)
             for issue_dict in issue_details:
                 issue = issue_map[issue_dict['id']]
-                if issue.has_updates(issue_dict):
+                issue_updated, last_update = issue.has_updates(issue_dict)
+                if issue_updated:
                     issue.apply_changes(issue_dict)
                     updated_issues.append(issue)
         status = 'Updated %d issues' % len(updated_issues)

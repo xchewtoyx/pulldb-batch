@@ -19,6 +19,8 @@ handlers:
 - url: /tasks/issues/.*
   script: tasks.issues.app
   login: admin
+- url: /batch/issues/.*
+  script: tasks.issues.app
 - url: /tasks/pulls/.*
   script: tasks.pulls.app
   login: admin
