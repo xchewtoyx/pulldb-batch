@@ -35,6 +35,8 @@ class ReshardPulls(TaskHandler):
 
     def get(self):
         shard = datetime.now().hour
+        if self.request.get('shard'):
+            shard = int(self.request.get('shard'))
         query = pulls.Pull.query(
             ndb.OR(
                 pulls.Pull.shard == shard,
