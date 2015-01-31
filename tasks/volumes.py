@@ -3,6 +3,7 @@ from functools import partial
 import json
 import logging
 import math
+from zlib import crc32
 
 from google.appengine.api import search
 from google.appengine.ext import ndb
@@ -172,8 +173,9 @@ class Reindex(TaskHandler):
 class ReshardVolumes(TaskHandler):
     @ndb.tasklet
     def reshard_task(self, shards, volume):
-        volume.fast_shard = volume.identifier % 24
-        volume.shard = volume.identifier % shards
+        seed = crc32(str(volume.identifier))
+        volume.fast_shard = seed % 24
+        volume.shard = seed % shards
         result = yield volume.put_async()
         raise ndb.Return(result)
 

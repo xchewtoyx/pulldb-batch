@@ -1,6 +1,7 @@
 from datetime import datetime
 import json
 import logging
+from zlib import crc32
 
 from google.appengine.ext import ndb
 
@@ -24,8 +25,9 @@ class ReshardPulls(TaskHandler):
             pull_id = int(pull.key.id())
             pull.identifier = pull_id
             changed = True
-        if pull_id % 24 != pull.shard:
-            pull.shard = pull_id % 24
+        seed = crc32(str(pull_id))
+        if seed % 24 != pull.shard:
+            pull.shard = seed % 24
             changed = True
         if changed:
             update = yield pull.put_async()

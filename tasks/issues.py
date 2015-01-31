@@ -2,6 +2,7 @@ from datetime import datetime, date, timedelta
 from functools import partial
 import json
 import logging
+from zlib import crc32
 
 from google.appengine.api import search
 from google.appengine.ext import ndb
@@ -142,7 +143,8 @@ class Reindex(TaskHandler):
 class ReshardIssues(TaskHandler):
     @ndb.tasklet
     def reshard_task(self, shards, issue):
-        issue.shard = issue.identifier % shards
+        seed = crc32(str(issue.identifier))
+        issue.shard = seed % shards
         result = yield issue.put_async()
         raise ndb.Return(result)
 

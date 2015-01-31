@@ -23,8 +23,9 @@ class ReshardSubs(TaskHandler):
             sub_id = int(subscription.key.id())
             subscription.identifier = sub_id
             changed = True
-        if sub_id % 24 != subscription.shard:
-            subscription.shard = sub_id % 24
+        seed = crc32(str(sub_id))
+        if seed % 24 != subscription.shard:
+            subscription.shard = seed % 24
             changed = True
         if changed:
             update = yield subscription.put_async()
