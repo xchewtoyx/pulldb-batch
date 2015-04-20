@@ -2,6 +2,7 @@ from datetime import datetime
 from functools import partial
 import json
 import logging
+from zlib import crc32
 
 from google.appengine.ext import ndb
 

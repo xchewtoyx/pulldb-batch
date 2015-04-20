@@ -25,7 +25,7 @@ class ReshardPulls(TaskHandler):
             pull_id = int(pull.key.id())
             pull.identifier = pull_id
             changed = True
-        seed = crc32(str(pull_id))
+        seed = crc32(pull.key.urlsafe())
         if seed % 24 != pull.shard:
             pull.shard = seed % 24
             changed = True
