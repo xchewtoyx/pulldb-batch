@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 from functools import partial
 import json
@@ -70,16 +71,7 @@ class RefreshVolumes(TaskHandler):
             shard_filter = volumes.Volume.shard == int(shard)
         return shard_filter
 
-    @ndb.toplevel
-    def get(self, shard_type='complete', *args):
-        # TODO(rgh): refactor this method
-        # pylint: disable=R0914
-        logging.info('Args: %r %r', shard_type, args)
-        self.cv = comicvine.load()
-        query = volumes.Volume.query(self.shard_filter(shard_type))
-        results = query.map(self.volume_issues)
-        sharded_ids = [result['volume_id'] for result in results]
-        volume_detail = {result['volume_id']: result for result in results}
+    def fetch_cv_volumes(self, sharded_ids):
         cv_volumes = []
         for index in range(0, len(sharded_ids), 100):
             volume_page = sharded_ids[index:min(index+100, len(sharded_ids))]
@@ -87,41 +79,76 @@ class RefreshVolumes(TaskHandler):
                 cv_volumes.extend(self.cv.fetch_volume_batch(volume_page))
             except Exception as error:
                 logging.exception(error)
-        for comicvine_volume in cv_volumes:
+        return cv_volumes
+
+    def fetch_cv_details(self, sharded_ids):
+        cv_detail = defaultdict(dict)
+        for comicvine_volume in self.fetch_cv_volumes(sharded_ids):
             if not comicvine_volume.get('date_last_updated'):
                 comicvine_volume['date_last_updated'] = date.today().isoformat()
             logging.debug('checking for new issues in %r', comicvine_volume)
             comicvine_id = comicvine_volume['id']
             comicvine_issues = self.fetch_issues(comicvine_volume)
             comicvine_issues = self.filter_results(comicvine_issues)
-            volume_detail[int(comicvine_id)]['cv_issues'] = comicvine_issues
-            volume_detail[int(comicvine_id)]['volume_detail'] = comicvine_volume
+            cv_detail[int(comicvine_id)]['cv_issues'] = comicvine_issues
+            cv_detail[int(comicvine_id)]['volume_detail'] = comicvine_volume
+            # TODO(rgh): Not sure about this next line.  seems to be noop
             volumes.volume_key(comicvine_volume, create=False)
+        return cv_detail
+
+    def find_new(self, volume_detail, cv_detail):
         new_issues = []
-        for detail in volume_detail.values():
-            for issue in detail['cv_issues']:
-                if int(issue['id']) not in detail['issue_ids']:
-                    new_issues.append((issue, detail['volume_key']))
+        for cv_issue in cv_detail['cv_issues']:
+            if int(cv_issue['id']) not in volume_detail['issue_ids']:
+                new_issues.append((cv_issue, volume_detail['volume_key']))
+        return new_issues
+
+    @ndb.toplevel
+    def get(self, shard_type='complete', *args):
+        # TODO(rgh): refactor this method
+        # pylint: disable=R0914
+        logging.info('Args: %r %r', shard_type, args)
+        self.cv = comicvine.load()
+
+        # Fetch the volumes due for checking
+        query = volumes.Volume.query(self.shard_filter(shard_type))
+        results = query.map(self.volume_issues)
+
+        # Build the list of ids and lookup table of id details
+        sharded_ids = [result['volume_id'] for result in results]
+        volume_detail = {result['volume_id']: result for result in results}
+
+        # Fill in missing details
+        cv_detail = self.fetch_cv_details(sharded_ids)
+
+        # Check for new issues
+        new_issues = []
+        for  volume_id in sharded_ids:
+            new_issues.extend(self.find_new(
+                volume_detail[volume_id], cv_detail[volume_id]))
+
+        # Create entries for new issues (async)
+        logging.info('Adding %d new issues', len(new_issues))
+        logging.debug('Adding new issues: %r', new_issues)
         for issue, volume_key in new_issues:
-            issues.issue_key(issue, volume_key=volume_key)
+            issues.issue_key(issue, volume_key=volume_key, batch=True)
+
+        # Update volume entries
         for volume_id in volume_detail:
             volume_key = ndb.Key('Volume', str(volume_id))
             logging.info('updating volume: %r' % volume_key)
-            volume_data = volume_detail[volume_id]['volume_detail']
+            volume_data = cv_detail[volume_id]['volume_detail']
             try:
                 last_issue_key = ndb.Key(
-                    'Issue', str(volume_data['last_issue']['id'])
-                )
+                    'Issue', str(volume_data['last_issue']['id']))
             except KeyError:
                 logging.info(
                     'Cannot update last issue data for %r, %r',
-                    volume_id, volume_data
-                )
+                    volume_id, volume_data)
                 continue
             volume = volume_key.get()
-            if volume and (
-                    volume.last_issue != last_issue_key or
-                    not volume.last_issue_date):
+            if volume and (volume.last_issue != last_issue_key or
+                           not volume.last_issue_date):
                 last_issue = last_issue_key.get()
                 volume.last_issue = last_issue_key
                 try:
@@ -129,15 +156,14 @@ class RefreshVolumes(TaskHandler):
                 except AttributeError:
                     logging.warn(
                         'Cannot update volume %r, last issue %r has no pubdate',
-                        volume, last_issue
-                    )
+                        volume, last_issue)
                 volume.put_async()
             else:
                 logging.info('not updating %r with %r',
                              volume_key, volume_data)
+
         status = 'Updated %d volumes. Found %d new issues' % (
-            len(sharded_ids), len(new_issues)
-        )
+            len(sharded_ids), len(new_issues))
         logging.info(status)
         self.response.write(json.dumps({
             'status': 200,
