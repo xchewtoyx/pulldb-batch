@@ -46,7 +46,7 @@ class StreamTotals(TaskHandler):
             raise ndb.Return(True)
 
     @VarzContext('streams')
-    def get(self):
+    def get(self, *args):
         varz = self.varz
         varz.action = 'updatecounts'
         query = streams.Stream.query()
@@ -87,7 +87,7 @@ class StreamWeights(TaskHandler):
         raise ndb.Return(len(changed))
 
     @VarzContext('streams')
-    def get(self):
+    def get(self, *args):
         varz = self.varz
         varz.action = 'updatecounts'
         query = streams.Stream.query()
@@ -108,6 +108,6 @@ class StreamWeights(TaskHandler):
         }))
 
 app = create_app([
-    Route('/tasks/streams/updatecounts', StreamTotals),
-    Route('/tasks/streams/updateweights', StreamWeights),
+    Route('/<:batch|tasks>/streams/updatecounts', StreamTotals),
+    Route('/<:batch|tasks>/streams/updateweights', StreamWeights),
 ])

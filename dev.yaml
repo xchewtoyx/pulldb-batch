@@ -29,6 +29,8 @@ handlers:
 - url: /tasks/streams/.*
   script: tasks.streams.app
   login: admin
+- url: /batch/streams/.*
+  script: tasks.streams.app
 - url: /tasks/subscriptions/.*
   script: tasks.subscriptions.app
   login: admin
