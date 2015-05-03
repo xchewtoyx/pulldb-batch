@@ -20,6 +20,7 @@ class StreamTotals(TaskHandler):
 
         query = pulls.Pull.query(
             pulls.Pull.stream == stream.key,
+            pulls.Pull.ignored == False,
             pulls.Pull.pulled == True,
             pulls.Pull.read == False,
             ancestor=stream.key.parent(),
@@ -72,6 +73,7 @@ class StreamWeights(TaskHandler):
     def update_weight(self, stream):
         stream_pulls = yield pulls.Pull.query(
             pulls.Pull.stream == stream.key,
+            pulls.Pull.ignored == False,
             pulls.Pull.pulled == True,
             pulls.Pull.read == False,
             ancestor=stream.key.parent(),
