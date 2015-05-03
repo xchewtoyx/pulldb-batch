@@ -65,35 +65,40 @@ class FetchNew(TaskHandler):
         }))
 
 class RefreshShard(TaskHandler):
-    def get(self, *args): # pylint: disable=unused-argument
+    @ndb.tasklet
+    def refresh_issue(self, issue):
+        issue_dict = self.cv_api.fetch_issue(
+            int(issue.key.id()), async=True)
         # pylint: disable=unused-variable
+        issue_updated, last_update = issue.has_updates(issue_dict)
+        if issue_updated:
+            issue.apply_changes(issue_dict)
+            yield issue.put_async()
+        raise ndb.Return(issue_updated)
+
+    @ndb.toplevel
+    def get(self, *args): # pylint: disable=unused-argument
+        # pylint: disable=unused-variable, attribute-defined-outside-init
+        self.cv_api = comicvine.load()
         shard = self.request.get('shard')
         if not shard:
             shard = datetime.today().hour + 24 * date.today().weekday()
-        cv_api = comicvine.load()
         query = issues.Issue.query(
             issues.Issue.shard == int(shard),
             issues.Issue.volume > None, # issue has volume
         )
-        issue_list = query.fetch()
-        issue_ids = [issue.key.id() for issue in issue_list]
-        issue_map = {issue.identifier: issue for issue in issue_list}
-        updated_issues = []
-        for index in range(0, len(issue_ids), 100):
-            ids = issue_ids[index:min([len(issue_ids), index+100])]
-            issue_details = cv_api.fetch_issue_batch(ids)
-            for issue_dict in issue_details:
-                issue = issue_map[issue_dict['id']]
-                issue_updated, last_update = issue.has_updates(issue_dict)
-                if issue_updated:
-                    issue.apply_changes(issue_dict)
-                    updated_issues.append(issue)
-        status = 'Updated %d issues' % len(updated_issues)
-        ndb.put_multi(updated_issues)
+        issue_count_future = query.count_async()
+        issue_updates = query.map(self.refresh_issue)
+        update_count = sum(1 for updated in issue_updates if updated)
+        issue_count = issue_count_future.get_result()
+        status = 'Updated %d of %d issues' % (update_count, issue_count)
         logging.info(status)
         self.response.write(json.dumps({
             'status': 200,
             'message': status,
+            'shard': shard,
+            'issues': issue_count,
+            'updates': update_count,
         }))
 
 class Reindex(TaskHandler):
