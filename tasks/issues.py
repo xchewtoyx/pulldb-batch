@@ -3,6 +3,7 @@ from datetime import datetime, date, timedelta
 from functools import partial
 import json
 import logging
+import sys
 from zlib import crc32
 
 from google.appengine.api import search
@@ -67,18 +68,23 @@ class FetchNew(TaskHandler):
 class RefreshShard(TaskHandler):
     @ndb.tasklet
     def refresh_issue(self, issue):
-        issue_dict = self.cv_api.fetch_issue(
-            int(issue.key.id()), async=True)
+        issue_dict = yield self.cv_api.fetch_issue_async(
+            int(issue.key.id()))
+        if not issue_dict:
+            issue_updated = False
+            logging.warn('Cannot update issue: %r', issue_dict)
         # pylint: disable=unused-variable
-        issue_updated, last_update = issue.has_updates(issue_dict)
+        else:
+            issue_updated, last_update = issue.has_updates(issue_dict)
         if issue_updated:
             issue.apply_changes(issue_dict)
             yield issue.put_async()
+        logging.debug('Issue %r updated', issue.key)
         raise ndb.Return(issue_updated)
 
-    @ndb.toplevel
     def get(self, *args): # pylint: disable=unused-argument
         # pylint: disable=unused-variable, attribute-defined-outside-init
+        logging.info('Recursion limit: %d', sys.getrecursionlimit())
         self.cv_api = comicvine.load()
         shard = self.request.get('shard')
         if not shard:
@@ -87,10 +93,12 @@ class RefreshShard(TaskHandler):
             issues.Issue.shard == int(shard),
             issues.Issue.volume > None, # issue has volume
         )
-        issue_count_future = query.count_async()
-        issue_updates = query.map(self.refresh_issue)
-        update_count = sum(1 for updated in issue_updates if updated)
-        issue_count = issue_count_future.get_result()
+        issue_count = query.count()
+        update_count = 0
+        for offset in range(0, issue_count, 60):
+            issue_updates = query.map(
+                self.refresh_issue, offset=offset, limit=60)
+            update_count += sum(1 for updated in issue_updates if updated)
         status = 'Updated %d of %d issues' % (update_count, issue_count)
         logging.info(status)
         self.response.write(json.dumps({
