@@ -1,3 +1,4 @@
+# pylint: disable=missing-docstring, no-self-use
 from datetime import datetime, date, timedelta
 from functools import partial
 import json
@@ -7,50 +8,28 @@ from zlib import crc32
 from google.appengine.api import search
 from google.appengine.ext import ndb
 
-# pylint: disable=F0401
 from pulldb.base import Route, TaskHandler, create_app
 from pulldb.models.admin import Setting
+from pulldb.models import arcs
 from pulldb.models import comicvine
 from pulldb.models import issues
 from pulldb.models import volumes
 
-# pylint: disable=W0232,C0103,E1101,R0201,R0903
-
 class FetchNew(TaskHandler):
-    def volume_list(self, issue_list):
-        logging.info('Fetching volumes for issue list: %r', issue_list)
-        volume_keys = []
-        for issue in issue_list:
-            if not isinstance(issue, dict):
-                logging.warn('Invalid issue data: %r', issue)
-                continue
-            volume_keys.append(
-                volumes.volume_key(issue['volume'], create=False)
-            )
-        volume_entries = ndb.get_multi(volume_keys)
-        return [volume.key.id() for volume in volume_entries if volume]
-
-    def find_candidates(self, new_issues):
-        volume_list = self.volume_list(new_issues)
-        candidates = []
-        for issue in new_issues:
-            if isinstance(issue, dict):
-                issue_key = issues.issue_key(str(issue['id']), create=False)
-                volume_key = volumes.volume_key(issue['volume'], create=False)
-                candidates.append(
-                    (issue, issue_key, volume_key)
-                )
-
-        # Pre-cache issues
-        ndb.get_multi_async(key for issue, key, volume in candidates)
-        return candidates, volume_list
+    @ndb.tasklet
+    def check_issue(self, issue):
+        volume_key = volumes.volume_key(issue['volume'], create=False)
+        arc_list = issue.get('story_arc_credits', [])
+        arc_keys = [arcs.arc_key(arc, create=False) for arc in arc_list]
+        collections = yield ndb.get_multi_async([volume_key] + arc_keys)
+        raise ndb.Return(issue, any(collections))
 
     @ndb.toplevel
     def get(self):
-        cv = comicvine.load()
+        cv_api = comicvine.load()
         today = date.today()
         yesterday = today - timedelta(1)
-        new_issues = cv.fetch_issue_batch(
+        new_issues = cv_api.fetch_issue_batch(
             [yesterday.isoformat(), today.isoformat()],
             filter_attr='date_added',
             deadline=60
@@ -60,18 +39,20 @@ class FetchNew(TaskHandler):
         new_issues = [
             issue for issue in new_issues if isinstance(issue, dict)
         ]
-        candidates, volume_list = self.find_candidates(new_issues)
+        issue_futures = [self.check_issue(issue) for issue in new_issues]
         added_issues = []
         skipped_issues = []
-        for issue_dict, key, volume in candidates:
-            issue = key.get()
-            if issue:
-                skipped_issues.append(key.id())
-                continue
-            if volume.id() in volume_list:
-                issue = issues.issue_key(
-                    issue_dict, volume, create=True, batch=True)
-                added_issues.append(issue)
+        for future in issue_futures:
+            issue_dict, candidate = future.get_result()
+            if candidate:
+                issue_key = issues.issue_key(issue_dict, create=False)
+                issue = issue_key.get()
+                if issue:
+                    skipped_issues.append(issue_key.id())
+                else:
+                    issue = issues.issue_key(
+                        issue_dict, create=True, batch=True)
+                    added_issues.append(issue)
         status = 'New issues: %d found, %d added, %d skipped' % (
             len(new_issues),
             len(added_issues),
@@ -84,11 +65,12 @@ class FetchNew(TaskHandler):
         }))
 
 class RefreshShard(TaskHandler):
-    def get(self, *args):
+    def get(self, *args): # pylint: disable=unused-argument
+        # pylint: disable=unused-variable
         shard = self.request.get('shard')
         if not shard:
             shard = datetime.today().hour + 24 * date.today().weekday()
-        cv = comicvine.load()
+        cv_api = comicvine.load()
         query = issues.Issue.query(
             issues.Issue.shard == int(shard),
             issues.Issue.volume > None, # issue has volume
@@ -99,7 +81,7 @@ class RefreshShard(TaskHandler):
         updated_issues = []
         for index in range(0, len(issue_ids), 100):
             ids = issue_ids[index:min([len(issue_ids), index+100])]
-            issue_details = cv.fetch_issue_batch(ids)
+            issue_details = cv_api.fetch_issue_batch(ids)
             for issue_dict in issue_details:
                 issue = issue_map[issue_dict['id']]
                 issue_updated, last_update = issue.has_updates(issue_dict)
@@ -128,7 +110,7 @@ class Reindex(TaskHandler):
             reindex_list.append(
                 issue.index_document(batch=True)
             )
-            issue.indexed=True
+            issue.indexed = True
             issue_list.append(issue)
         logging.info('Reindexing %d issues', len(issue_list))
         if len(issue_list):
@@ -227,7 +209,7 @@ class FixVolumeKey(TaskHandler):
             {'status': 200, 'count': fixed_count, 'total': len(fixed)}))
 
 
-app = create_app([
+app = create_app([ # pylint: disable=invalid-name
     Route('/tasks/issues/convert', ConvertIssues),
     Route('/tasks/issues/fetchnew', FetchNew),
     Route('/<:batch|tasks>/issues/refresh', RefreshShard),
