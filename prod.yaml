@@ -37,3 +37,6 @@ handlers:
 - url: /tasks/volumes/.*
   script: tasks.volumes.app
   login: admin
+- url: /tasks/watches/.*
+  script: tasks.watches.app
+  login: admin

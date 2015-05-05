@@ -46,3 +46,8 @@ handlers:
   login: admin
 - url: /batch/volumes/.*
   script: tasks.volumes.app
+- url: /tasks/watches/.*
+  script: tasks.watches.app
+  login: admin
+- url: /batch/watches/.*
+  script: tasks.watches.app
