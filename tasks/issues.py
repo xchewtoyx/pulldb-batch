@@ -19,18 +19,26 @@ from pulldb.models import volumes
 class FetchNew(TaskHandler):
     @ndb.tasklet
     def check_issue(self, issue):
+        issue_key = issues.issue_key(issue, create=False)
+        if issue_key.get():
+            ndb.Return(issue, False)
         volume_key = volumes.volume_key(issue['volume'], create=False)
+        if volume_key.get():
+            ndb.Return(issue, True)
+        issue_detail = yield self.cv_api.fetch_issue_async(issue['id'])
+        if issue_detail:
+            issue.update(issue_detail)
         arc_list = issue.get('story_arc_credits', [])
         arc_keys = [arcs.arc_key(arc, create=False) for arc in arc_list]
-        collections = yield ndb.get_multi_async([volume_key] + arc_keys)
+        collections = yield ndb.get_multi_async(arc_keys)
         raise ndb.Return(issue, any(collections))
 
     @ndb.toplevel
     def get(self):
-        cv_api = comicvine.load()
+        self.cv_api = comicvine.load()
         today = date.today()
         yesterday = today - timedelta(1)
-        new_issues = cv_api.fetch_issue_batch(
+        new_issues = self.cv_api.fetch_issue_batch(
             [yesterday.isoformat(), today.isoformat()],
             filter_attr='date_added',
             deadline=60
@@ -46,14 +54,12 @@ class FetchNew(TaskHandler):
         for future in issue_futures:
             issue_dict, candidate = future.get_result()
             if candidate:
-                issue_key = issues.issue_key(issue_dict, create=False)
-                issue = issue_key.get()
-                if issue:
-                    skipped_issues.append(issue_key.id())
-                else:
-                    issue = issues.issue_key(
-                        issue_dict, create=True, batch=True)
-                    added_issues.append(issue)
+                issue = issues.issue_key(
+                    issue_dict, create=True, batch=True)
+                added_issues.append(issue)
+            else:
+                skipped_issues.append(issue_dict['id'])
+
         status = 'New issues: %d found, %d added, %d skipped' % (
             len(new_issues),
             len(added_issues),
