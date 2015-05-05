@@ -16,6 +16,11 @@ libraries:
   version: latest
 
 handlers:
+- url: /tasks/arcs/.*
+  script: tasks.arcs.app
+  login: admin
+- url: /batch/arcs/.*
+  script: tasks.arcs.app
 - url: /tasks/issues/.*
   script: tasks.issues.app
   login: admin
