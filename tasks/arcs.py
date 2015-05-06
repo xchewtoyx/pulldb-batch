@@ -13,6 +13,7 @@ from pulldb.models.admin import Setting
 from pulldb.models import arcs
 from pulldb.models import comicvine
 from pulldb.models import issues
+from pulldb.varz import VarzContext
 
 class QueueArcs(TaskHandler):
     @ndb.tasklet
@@ -59,7 +60,7 @@ class RefreshArcs(TaskHandler):
         for issue in issue_list:
             if not issues.issue_key(issue, create=False):
                 new_ids.append(issue['id'])
-        issue_dicts = cv_api.fetch_issue_batch(issue_ids)
+        issue_dicts = self.cv_api.fetch_issue_batch(new_ids)
         new_issues = []
         for issue in issue_dicts:
             new_issues.append(
@@ -70,8 +71,7 @@ class RefreshArcs(TaskHandler):
     @ndb.tasklet
     def check_arcs(self, arc):
         # pylint: disable=no-self-use,unused-variable
-        cv_api = comicvine.load()
-        arc_dict = yield cv_api.fetch_story_arc_async(
+        arc_dict = yield self.cv_api.fetch_story_arc_async(
             int(arc.identifier))
         if not arc_dict:
             arc_updated = False
@@ -82,21 +82,26 @@ class RefreshArcs(TaskHandler):
                 logging.debug('StoryArc %r updated', arc.key)
                 arc.apply_changes(arc_dict)
             arc.complete = True
-            new_issues = self.find_new_issues(arc_dict['issues'])
+            new_issues = yield self.find_new_issues(arc_dict['issues'])
             yield arc.put_async()
-        raise ndb.Return(arc_updated)
+        raise ndb.Return(arc_updated, len(new_issues))
 
-    @ndb.toplevel
+    @VarzContext('arc_queue')
     def get(self, *args):
+        self.cv_api = comicvine.load()
         arc_query = arcs.StoryArc.query(
             arcs.StoryArc.complete == False
         )
         incomplete_arcs = arc_query.count_async()
         results = arc_query.map(self.check_arcs, limit=30)
-        updates = sum(1 for update in results if update)
+        updates = sum(1 for update, count in results if update)
+        new_issues = sum(count for update, count in results)
+        self.varz.backlog = incomplete_arcs.get_result()
+        self.varz.updates = updates
+        self.varz.new_issues = new_issues
 
-        status = 'Updated %d of %d queued arcs' % (
-            updates, incomplete_arcs.get_result())
+        status = 'Updated %d of %d queued arcs (%d new issues)' % (
+            updates, self.varz.backlog, new_issues)
         logging.info(status)
         self.response.write(json.dumps({
             'status': 200,
