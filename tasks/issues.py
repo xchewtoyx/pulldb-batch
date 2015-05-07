@@ -22,7 +22,7 @@ class FetchNew(TaskHandler):
     @ndb.tasklet
     def check_issue(self, issue):
         issue_key = issues.issue_key(issue, create=False)
-        if issue_key.get():
+        if issue_key and issue_key.get():
             ndb.Return(issue, False)
         volume_key = volumes.volume_key(issue['volume'], create=False)
         if volume_key.get():
@@ -150,8 +150,10 @@ class RefreshBatch(TaskHandler):
         )
         issue_count = query.count_async()
         self.varz.update_count = 0
-        for offset in range(0, 100, 50):
-            updates = query.map(self.refresh_issue, offset=offset, limit=50)
+        limit = int(self.request.get('limit', 150))
+        step = int(self.request.get('step', 50))
+        for offset in range(0, limit, step):
+            updates = query.map(self.refresh_issue, offset=offset, limit=step)
             self.varz.update_count += sum(1 for updated in updates if updated)
         self.varz.backlog = issue_count = issue_count.get_result()
         status = 'Updated %d of %d issues' % (

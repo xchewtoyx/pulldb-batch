@@ -1,23 +1,132 @@
+# pylint: disable=missing-docstring
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from functools import partial
 import json
 import logging
-import math
+import time
 from zlib import crc32
 
 from google.appengine.api import search
 from google.appengine.ext import ndb
+from google.appengine.ext.ndb.tasklets import Future
 
-# pylint: disable=F0401
 from pulldb.base import create_app, Route, TaskHandler
 from pulldb.models.admin import Setting
 from pulldb.models import comicvine
 from pulldb.models import issues
-from pulldb.models import subscriptions
 from pulldb.models import volumes
+from pulldb.varz import VarzContext
 
-# pylint: disable=W0232,C0103,E1101,R0201,R0903,W0201
+class RequeueVolumes(TaskHandler):
+    @ndb.tasklet
+    def queue_volume(self, volume): # pylint: disable=no-self-use
+        if volume.complete:
+            volume.complete = False
+            yield volume.put_async()
+            raise ndb.Return(True)
+
+    def shard(self):
+        # Check weekly for all volumes
+        shards_key = Setting.query(
+            Setting.name == 'volume_shard_count').get()
+        shard = int(time.time() // 3600) % int(shards_key.value)
+        logmsg = 'Requeueing all volumes in shard %s'
+        if self.request.get('shard'):
+            shard = int(self.request.get('shard'))
+        logging.info(logmsg, shard)
+        return shard
+
+    @ndb.toplevel
+    def get(self):
+        # Fetch the volumes due for checking
+        shard = self.shard()
+        query = volumes.Volume.query(
+            volumes.Volume.shard == shard
+        )
+        volume_count = query.count_async()
+        results = query.map(self.queue_volume)
+        updated = sum(1 for volume in results if volume)
+        status = 'Marking %d of %d issues in shard %d' % (
+            updated, volume_count.get_result(), shard)
+        logging.info(status)
+        self.response.write(json.dumps({
+            'status': 200,
+            'message': status,
+        }))
+
+
+class RefreshBatch(TaskHandler):
+    def __init__(self, *args, **kwargs):
+        super(RefreshBatch, self).__init__(*args, **kwargs)
+        self.cv_api = None
+        self.varz = None
+
+    @ndb.tasklet
+    def find_new_issues(self, volume_id):
+        pages = yield self.cv_api.fetch_issue_batch_async(
+            [volume_id], filter_attr='volume')
+        issue_dicts = []
+        for page in pages:
+            issue_dicts.extend(page)
+        new_issues = []
+        for issue in issue_dicts:
+            issue_key = issues.issue_key(issue, create=True, batch=True)
+            if isinstance(issue_key, Future):
+                new_issues.append(issue_key)
+        issue_keys = yield new_issues
+        raise ndb.Return(issue_keys)
+
+    @ndb.tasklet
+    def check_volumes(self, volume):
+        # pylint: disable=no-self-use,unused-variable
+        volume_dict = yield self.cv_api.fetch_volume_async(
+            int(volume.identifier))
+        if not volume_dict:
+            volume_updated = False
+            logging.warn('Cannot update volume: %r', volume.key)
+        else:
+            volume_updated, last_update = volume.has_updates(volume_dict)
+            if volume_updated:
+                logging.debug('Volume %r updated', volume.key)
+                volume.apply_changes(volume_dict)
+            volume.complete = True
+            # TODO(rgh): more efficient to do fetch volume without issues
+            #            field then fetch issues filtered by volume
+            new_issues = yield self.find_new_issues(volume_dict['id'])
+            yield volume.put_async()
+        raise ndb.Return(volume_updated, len(new_issues))
+
+    @VarzContext('volume_queue')
+    def get(self):
+        self.cv_api = comicvine.load()
+        volume_query = volumes.Volume.query(
+            volumes.Volume.complete == False
+        )
+        incomplete_volumes = volume_query.count_async()
+        limit = int(self.request.get('limit', 50))
+        step = int(self.request.get('step', 10))
+        logging.info('Refreshing %d issues in batches of %d', limit, step)
+        updates = 0
+        new_issues = 0
+        for offset in range(0, limit, step):
+            batch_size = min([step, limit-offset])
+            results = volume_query.map(
+                self.check_volumes, offset=offset, limit=batch_size)
+            updates += sum(1 for update, count in results if update)
+            new_issues += sum(count for update, count in results)
+        self.varz.backlog = incomplete_volumes.get_result()
+        self.varz.updates = updates
+        self.varz.new_issues = new_issues
+
+        status = 'Updated %d of %d queued volumes (%d new issues)' % (
+            updates, self.varz.backlog, new_issues)
+        logging.info(status)
+        self.response.write(json.dumps({
+            'status': 200,
+            'message': status,
+        }))
+
 
 class RefreshVolumes(TaskHandler):
     @ndb.tasklet
@@ -38,7 +147,7 @@ class RefreshVolumes(TaskHandler):
         all_issues = volume.get('issues', [])
         if not all_issues:
             try:
-                all_issues = self.cv.fetch_issue_batch(
+                all_issues = self.cv_api.fetch_issue_batch(
                     [volume['id']], filter_attr='volume'
                 )
             except Exception as error: #TODO(rgh): Remove blanket catch
@@ -76,7 +185,7 @@ class RefreshVolumes(TaskHandler):
         for index in range(0, len(sharded_ids), 100):
             volume_page = sharded_ids[index:min(index+100, len(sharded_ids))]
             try:
-                cv_volumes.extend(self.cv.fetch_volume_batch(volume_page))
+                cv_volumes.extend(self.cv_api.fetch_volume_batch(volume_page))
             except Exception as error:
                 logging.exception(error)
         return cv_volumes
@@ -108,7 +217,7 @@ class RefreshVolumes(TaskHandler):
         # TODO(rgh): refactor this method
         # pylint: disable=R0914
         logging.info('Args: %r %r', shard_type, args)
-        self.cv = comicvine.load()
+        self.cv_api = comicvine.load()
 
         # Fetch the volumes due for checking
         query = volumes.Volume.query(self.shard_filter(shard_type))
@@ -136,7 +245,7 @@ class RefreshVolumes(TaskHandler):
         # Update volume entries
         for volume_id in volume_detail:
             volume_key = ndb.Key('Volume', str(volume_id))
-            logging.info('updating volume: %r' % volume_key)
+            logging.info('updating volume: %r', volume_key)
             volume_data = cv_detail[volume_id]['volume_detail']
             try:
                 last_issue_key = ndb.Key(
@@ -171,7 +280,7 @@ class RefreshVolumes(TaskHandler):
         }))
 
 class Reindex(TaskHandler):
-    def get(self):
+    def get(self): # pylint: disable=no-self-use
         query = volumes.Volume.query(
             volumes.Volume.indexed == False
         )
@@ -184,7 +293,7 @@ class Reindex(TaskHandler):
             reindex_list.append(
                 volume.index_document(batch=True)
             )
-            volume.indexed=True
+            volume.indexed = True
             volume_list.append(volume)
         logging.info('Reindexing %d volumes', len(reindex_list))
         if len(reindex_list):
@@ -198,8 +307,8 @@ class Reindex(TaskHandler):
 
 class ReshardVolumes(TaskHandler):
     @ndb.tasklet
-    def reshard_task(self, shards, volume):
-        seed = crc32(str(volume.identifier))
+    def reshard_task(self, shards, volume): # pylint: disable=no-self-use
+        seed = crc32(volume.key.urlsafe())
         volume.fast_shard = seed % 24
         volume.shard = seed % shards
         result = yield volume.put_async()
@@ -219,57 +328,10 @@ class ReshardVolumes(TaskHandler):
             'message': '%d volumes resharded' % len(results),
         }))
 
-class Validate(TaskHandler):
-    @ndb.tasklet
-    def drop_invalid(self, volume):
-        if volume.key.id() != str(volume.identifier):
-            yield volume.key.delete_async()
-            raise ndb.Return(True)
 
-    def get(self):
-        query = volumes.Volume.query()
-        results = query.map(self.drop_invalid)
-        deleted = sum(1 for deleted in results if deleted)
-        self.response.write(json.dumps({
-            'status': 200,
-            'deleted': deleted,
-        }))
-
-
-class FixIssueKeys(TaskHandler):
-    @ndb.tasklet
-    def check_type(self, volume):
-        changed = False
-        if volume.first_issue and not isinstance(
-                volume.first_issue.id(), basestring):
-            volume.first_issue = ndb.Key('Issue', str(volume.first_issue.id()))
-            changed = True
-        if volume.last_issue and not isinstance(
-                volume.last_issue.id(), basestring):
-            volume.last_issue = ndb.Key('Issue', str(volume.last_issue.id()))
-            changed = True
-        if changed:
-            yield volume.put_async()
-        else:
-            try:
-                logging.debug('unchanged: %r %r',
-                              type(volume.first_issue.id()),
-                              type(volume.last_issue.id()))
-            except:
-                pass
-        raise ndb.Return(changed)
-
-    def get(self):
-        query = volumes.Volume.query()
-        fixed = query.map(self.check_type)
-        fixed_count = sum([1 for state in fixed if state])
-        self.response.write(json.dumps({
-            'status': 200,
-            'total': len(fixed),
-            'fixed': fixed_count}))
-
-
-app = create_app([
+app = create_app([ # pylint: disable=invalid-name
+    Route('/tasks/volumes/requeue', RequeueVolumes),
+    Route('/tasks/volumes/refresh/batch', RefreshBatch),
     Route(
         '/<:batch|tasks>/volumes/refresh',
         RefreshVolumes
@@ -280,6 +342,4 @@ app = create_app([
     ),
     Route('/tasks/volumes/reindex', Reindex),
     Route('/tasks/volumes/reshard', ReshardVolumes),
-    Route('/tasks/volumes/validate', Validate),
-    Route('/tasks/volumes/fixissuekeys', FixIssueKeys),
 ])
