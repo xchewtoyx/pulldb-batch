@@ -82,6 +82,7 @@ class RefreshBatch(TaskHandler):
         # pylint: disable=no-self-use,unused-variable
         volume_dict = yield self.cv_api.fetch_volume_async(
             int(volume.identifier))
+        new_issues = []
         if not volume_dict:
             volume_updated = False
             logging.warn('Cannot update volume: %r', volume.key)
