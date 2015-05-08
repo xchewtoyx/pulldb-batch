@@ -172,6 +172,7 @@ class RefreshShard(TaskHandler):
     def refresh_issue(self, issue):
         issue_dict = yield self.cv_api.fetch_issue_async(
             int(issue.key.id()))
+        issue_changed = False
         issue_updated = False
         if issue_dict:
             # pylint: disable=unused-variable
