@@ -6,7 +6,9 @@ import time
 from zlib import crc32
 
 from google.appengine.api import search
+from google.appengine.api.urlfetch_errors import DeadlineExceededError
 from google.appengine.ext import ndb
+from google.appengine.ext.ndb.tasklets import Future
 
 from pulldb.base import create_app, Route, TaskHandler
 from pulldb.models.admin import Setting
@@ -56,23 +58,30 @@ class QueueArcs(TaskHandler):
 class RefreshArcs(TaskHandler):
     @ndb.tasklet
     def find_new_issues(self, issue_list):
-        new_ids = []
-        for issue in issue_list:
-            if not issues.issue_key(issue, create=False):
-                new_ids.append(issue['id'])
-        issue_dicts = self.cv_api.fetch_issue_batch(new_ids)
+        issue_ids = [issue['id'] for issue in issue_list]
+        pages = yield self.cv_api.fetch_issue_batch_async(issue_ids)
+        issue_dicts = []
+        for page in pages:
+            issue_dicts.extend(page)
         new_issues = []
         for issue in issue_dicts:
-            new_issues.append(
-                issues.issue_key(issue, create=True, batch=True))
+            issue_key = issues.issue_key(issue, create=True, batch=True)
+            if isinstance(issue_key, Future):
+                new_issues.append(issue_key)
         issue_keys = yield new_issues
         raise ndb.Return(issue_keys)
 
     @ndb.tasklet
     def check_arcs(self, arc):
         # pylint: disable=no-self-use,unused-variable
-        arc_dict = yield self.cv_api.fetch_story_arc_async(
-            int(arc.identifier))
+        try:
+            arc_dict = yield self.cv_api.fetch_story_arc_async(
+                int(arc.identifier))
+        except DeadlineExceededError as err:
+            logging.error('Timeout fetching arc %d [%r]',
+                          int(arc.identifier), err)
+            arc_dict = None
+        new_issues = []
         if not arc_dict:
             arc_updated = False
             logging.warn('Cannot update arc: %r', arc.key)

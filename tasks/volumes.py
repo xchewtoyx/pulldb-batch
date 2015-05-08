@@ -8,6 +8,7 @@ import time
 from zlib import crc32
 
 from google.appengine.api import search
+from google.appengine.api.urlfetch_errors import DeadlineExceededError
 from google.appengine.ext import ndb
 from google.appengine.ext.ndb.tasklets import Future
 
@@ -63,9 +64,9 @@ class RefreshBatch(TaskHandler):
         self.varz = None
 
     @ndb.tasklet
-    def find_new_issues(self, volume_id):
+    def find_new_issues(self, volume):
         pages = yield self.cv_api.fetch_issue_batch_async(
-            [volume_id], filter_attr='volume')
+            [int(volume.identifier)], filter_attr='volume')
         issue_dicts = []
         for page in pages:
             issue_dicts.extend(page)
@@ -80,8 +81,13 @@ class RefreshBatch(TaskHandler):
     @ndb.tasklet
     def check_volumes(self, volume):
         # pylint: disable=no-self-use,unused-variable
-        volume_dict = yield self.cv_api.fetch_volume_async(
-            int(volume.identifier))
+        try:
+            volume_dict = yield self.cv_api.fetch_volume_async(
+                int(volume.identifier))
+        except DeadlineExceededError as err:
+            logging.error('Timeout fetching volume %d [%r]',
+                          int(volume.identifier), err)
+            volume_dict = None
         new_issues = []
         if not volume_dict:
             volume_updated = False
@@ -92,9 +98,7 @@ class RefreshBatch(TaskHandler):
                 logging.debug('Volume %r updated', volume.key)
                 volume.apply_changes(volume_dict)
             volume.complete = True
-            # TODO(rgh): more efficient to do fetch volume without issues
-            #            field then fetch issues filtered by volume
-            new_issues = yield self.find_new_issues(volume_dict['id'])
+            new_issues = yield self.find_new_issues(volume)
             yield volume.put_async()
         raise ndb.Return(volume_updated, len(new_issues))
 
@@ -107,7 +111,7 @@ class RefreshBatch(TaskHandler):
         incomplete_volumes = volume_query.count_async()
         limit = int(self.request.get('limit', 50))
         step = int(self.request.get('step', 10))
-        logging.info('Refreshing %d issues in batches of %d', limit, step)
+        logging.info('Refreshing %d volumes in batches of %d', limit, step)
         updates = 0
         new_issues = 0
         for offset in range(0, limit, step):
