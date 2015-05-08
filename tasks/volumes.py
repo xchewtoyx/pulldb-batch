@@ -289,6 +289,7 @@ class Reindex(TaskHandler):
         query = volumes.Volume.query(
             volumes.Volume.indexed == False
         )
+        backlog = query.count_async()
         # index.put can only update 200 docs at a time
         volumes_future = query.fetch_async(limit=200)
         index = search.Index(name='volumes')
@@ -309,6 +310,17 @@ class Reindex(TaskHandler):
                 logging.exception(error)
             else:
                 ndb.put_multi(volume_list)
+        update_count = len(volume_list)
+        self.response.write(json.dumps({
+            'status': 200,
+            'message': 'Reindexed %d of %d outstanding issues' % (
+                update_count,
+                backlog.get_result(),
+            ),
+            'backlog': backlog.get_result(),
+            'count': update_count,
+        }))
+
 
 class ReshardVolumes(TaskHandler):
     @ndb.tasklet

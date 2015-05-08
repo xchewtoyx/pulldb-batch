@@ -227,6 +227,7 @@ class Reindex(TaskHandler):
         query = issues.Issue.query(
             issues.Issue.indexed == False,
         )
+        backlog = query.count_async()
         # index.put can only handle 200 docs at a time
         issues_future = query.fetch_async(limit=200)
         index = search.Index(name='issues')
@@ -247,6 +248,16 @@ class Reindex(TaskHandler):
                 logging.exception(error)
             else:
                 ndb.put_multi(issue_list)
+        update_count = len(issue_list)
+        self.response.write(json.dumps({
+            'status': 200,
+            'message': 'Reindexed %d of %d outstanding issues' % (
+                update_count,
+                backlog.get_result(),
+            ),
+            'backlog': backlog.get_result(),
+            'count': update_count,
+        }))
 
 
 class ReshardIssues(TaskHandler):
