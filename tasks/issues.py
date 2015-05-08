@@ -172,17 +172,22 @@ class RefreshShard(TaskHandler):
     def refresh_issue(self, issue):
         issue_dict = yield self.cv_api.fetch_issue_async(
             int(issue.key.id()))
-        if not issue_dict:
-            issue_updated = False
-            logging.warn('Cannot update issue: %r', issue_dict)
-        # pylint: disable=unused-variable
+        issue_updated = False
+        if issue_dict:
+            # pylint: disable=unused-variable
+            issue_changed, last_update = issue.has_updates(issue_dict)
+            if issue_changed:
+                issue.apply_changes(issue_dict)
+                issue_updated = True
+            if not issue.complete:
+                issue.complete = True
+                issue_updated = True
         else:
-            issue_updated, last_update = issue.has_updates(issue_dict)
+            logging.warn('Cannot update issue: %r', issue_dict)
         if issue_updated:
-            issue.apply_changes(issue_dict)
             yield issue.put_async()
         logging.debug('Issue %r updated', issue.key)
-        raise ndb.Return(issue_updated)
+        raise ndb.Return(issue_changed)
 
     def shard_filter(self):
         shard_key = Setting.query(
