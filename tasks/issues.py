@@ -28,7 +28,12 @@ class FetchNew(TaskHandler):
         volume_key = volumes.volume_key(issue['volume'], create=False)
         if volume_key.get():
             ndb.Return(issue, True)
-        issue_detail = yield self.cv_api.fetch_issue_async(issue['id'])
+        try:
+            issue_detail = yield self.cv_api.fetch_issue_async(issue['id'])
+        except DeadlineExceededError as err:
+            logging.warn("Cannot fetch issue detail for %s (%r)",
+                         issue['id'], err)
+            issue_detail = None
         if issue_detail:
             issue.update(issue_detail)
         arc_list = issue.get('story_arc_credits', [])
@@ -55,11 +60,15 @@ class FetchNew(TaskHandler):
         self.cv_api = comicvine.load()
         today = date.today()
         yesterday = today - timedelta(1)
-        new_issues = self.cv_api.fetch_issue_batch(
-            [yesterday.isoformat(), today.isoformat()],
-            filter_attr='date_added',
-            deadline=60
-        )
+        try:
+            new_issues = self.cv_api.fetch_issue_batch(
+                [yesterday.isoformat(), today.isoformat()],
+                filter_attr='date_added',
+                deadline=60
+            )
+        except DeadlineExceededError as err:
+            logging.warn("Error fetching new issues %r", err)
+            new_issues = []
         # Fixup for sometimes getting 'number_of_page_results' mixed into
         # the results
         new_issues = [
