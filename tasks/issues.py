@@ -8,6 +8,7 @@ import time
 from zlib import crc32
 
 from google.appengine.api import search
+from google.appengine.api.urlfetch_errors import DeadlineExceededError
 from google.appengine.ext import ndb
 
 from pulldb.base import Route, TaskHandler, create_app
@@ -126,8 +127,11 @@ class RequeueShard(TaskHandler):
 class RefreshBatch(TaskHandler):
     @ndb.tasklet
     def refresh_issue(self, issue):
-        issue_dict = yield self.cv_api.fetch_issue_async(
-            int(issue.key.id()))
+        try:
+            issue_dict = yield self.cv_api.fetch_issue_async(
+                int(issue.key.id()))
+        except DeadlineExceededError as err:
+            issue_dict = None
         if not issue_dict:
             issue_updated = False
             logging.warn('Cannot update issue: %r', issue_dict)

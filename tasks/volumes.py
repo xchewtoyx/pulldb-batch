@@ -199,7 +199,7 @@ class RefreshVolumes(TaskHandler):
         cv_detail = defaultdict(dict)
         for comicvine_volume in self.fetch_cv_volumes(sharded_ids):
             if not comicvine_volume.get('date_last_updated'):
-                comicvine_volume['date_last_updated'] = date.today().isoformat()
+                comicvine_volume['date_last_updated'] = datetime.min
             logging.debug('checking for new issues in %r', comicvine_volume)
             comicvine_id = comicvine_volume['id']
             comicvine_issues = self.fetch_issues(comicvine_volume)
@@ -212,7 +212,7 @@ class RefreshVolumes(TaskHandler):
 
     def find_new(self, volume_detail, cv_detail):
         new_issues = []
-        for cv_issue in cv_detail['cv_issues']:
+        for cv_issue in cv_detail.get('cv_issues', []):
             if int(cv_issue['id']) not in volume_detail['issue_ids']:
                 new_issues.append((cv_issue, volume_detail['volume_key']))
         return new_issues
