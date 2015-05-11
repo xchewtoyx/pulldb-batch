@@ -66,7 +66,7 @@ class FetchNew(TaskHandler):
                 filter_attr='date_added',
                 deadline=60
             )
-        except DeadlineExceededError as err:
+        except (cv_api.ApiError, DeadlineExceededError) as err:
             logging.warn("Error fetching new issues %r", err)
             new_issues = []
         # Fixup for sometimes getting 'number_of_page_results' mixed into
@@ -218,6 +218,7 @@ class RefreshShard(TaskHandler):
         shard = self.shard_filter()
         query = issues.Issue.query(
             issues.Issue.shard == int(shard),
+            issues.Issue.complete == False,
         )
         issue_count = query.count()
         update_count = 0

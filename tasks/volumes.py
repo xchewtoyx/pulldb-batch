@@ -65,8 +65,13 @@ class RefreshBatch(TaskHandler):
 
     @ndb.tasklet
     def find_new_issues(self, volume):
-        pages = yield self.cv_api.fetch_issue_batch_async(
-            [int(volume.identifier)], filter_attr='volume')
+        pages = []
+        try:
+            pages = yield self.cv_api.fetch_issue_batch_async(
+                [int(volume.identifier)], filter_attr='volume')
+        except DeadlineExceededError as err:
+            logging.error('Timeout fetching issues for volume %d [%r]',
+                          int(volume.identifier), err)
         issue_dicts = []
         for page in pages:
             issue_dicts.extend(page)
@@ -182,7 +187,10 @@ class RefreshVolumes(TaskHandler):
                 volumes.Volume.last_issue_date >= active_threshold,
             )
         else:
-            shard_filter = volumes.Volume.shard == int(shard)
+            shard_filter = ndb.AND(
+                volumes.Volume.shard == int(shard),
+                volumes.Volume.complete == False,
+            )
         return shard_filter
 
     def fetch_cv_volumes(self, sharded_ids):
