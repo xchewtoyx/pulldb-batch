@@ -59,10 +59,13 @@ class RefreshArcs(TaskHandler):
     @ndb.tasklet
     def find_new_issues(self, issue_list):
         issue_ids = [issue['id'] for issue in issue_list]
-        pages = yield self.cv_api.fetch_issue_batch_async(issue_ids)
         issue_dicts = []
-        for page in pages:
-            issue_dicts.extend(page)
+        # Limit to 200 filter ids at a time
+        for index in range(0, len(issue_list), 200):
+            pages = yield self.cv_api.fetch_issue_batch_async(
+                issue_ids[index:index+200])
+            for page in pages:
+                issue_dicts.extend(page)
         new_issues = []
         for issue in issue_dicts:
             issue_key = issues.issue_key(issue, create=True, batch=True)
