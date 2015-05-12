@@ -1,12 +1,14 @@
 from datetime import datetime
 import json
 import logging
+import time
 from zlib import crc32
 
 from google.appengine.ext import ndb
 
 # pylint: disable=F0401
 from pulldb.base import create_app, Route, TaskHandler
+from pulldb.models.admin import Setting
 from pulldb.models.base import model_to_dict
 from pulldb.models import pulls
 from pulldb.models import streams
@@ -14,6 +16,45 @@ from pulldb.models import subscriptions
 from pulldb.models import volumes
 
 # pylint: disable=W0232,C0103,E1101,R0201,R0903
+
+class QueueActiveIssues(TaskHandler):
+    @ndb.tasklet
+    def queue_issues(self, pull):
+        issue = yield pull.issue.get_async()
+        if issue.complete:
+            issue.complete = False
+            yield issue.put_async()
+            raise ndb.Return(issue)
+
+    def active_shard(self, offset=3):
+        if self.request.get('shard'):
+            return int(self.request.get('shard'))
+        shard_key = Setting.query(Setting.name == 'pull_shard_count')
+        shard_count = int(shard_key.get().value)
+        shard = (int(time.time() // 3600) + offset) % shard_count
+        return shard
+
+    def get(self):
+        shard = self.active_shard()
+        query = pulls.Pull.query(
+            pulls.Pull.ignored == False,
+            pulls.Pull.read == False,
+            pulls.Pull.shard == shard,
+        )
+        count_future = query.count_async()
+        queued = query.map(self.queue_issues)
+        pull_count = count_future.get_result()
+        updated = sum(1 for issue in queued if issue)
+        message = 'Queued issues for %d of %d pulls in shard %d' % (
+            updated, pull_count, shard)
+        self.response.write({
+            'status': 200,
+            'message': message,
+            'total': pull_count,
+            'queued': updated,
+            'shard': shard,
+        })
+
 
 class ReshardPulls(TaskHandler):
     @ndb.tasklet
@@ -195,6 +236,7 @@ class Validate(TaskHandler):
 
 app = create_app([
     Route('/<:batch|tasks>/pulls/update/streams', StreamSelect),
+    Route('/tasks/pulls/queue/issues', QueueActiveIssues),
     Route('/<:batch|tasks>/pulls/refresh', Refresh),
     Route('/tasks/pulls/reshard', ReshardPulls),
     Route('/tasks/pulls/validate', Validate),
