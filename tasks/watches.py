@@ -13,6 +13,45 @@ from pulldb.models import issues
 from pulldb.models import pulls
 from pulldb.models import subscriptions
 
+class QueueActiveCollections(TaskHandler):
+    @ndb.tasklet
+    def queue_collections(self, watch):
+        collection = yield watch.collection.get_async()
+        if collection.complete:
+            collection.complete = False
+            yield collection.put_async()
+            raise ndb.Return(collection)
+
+    def active_shard(self, offset=3):
+        if self.request.get('shard'):
+            return int(self.request.get('shard'))
+        shard_key = admin.Setting.query(
+            admin.Setting.name == 'watch_shard_count')
+        shard_count = int(shard_key.get().value)
+        shard = (int(time.time() // 3600) + offset) % shard_count
+        return shard
+
+    def get(self):
+        shard = self.active_shard()
+        query = subscriptions.WatchList.query(
+            subscriptions.WatchList.shard == shard,
+        )
+        count_future = query.count_async()
+        queued = query.map(self.queue_collections)
+        collection_count = count_future.get_result()
+        updated = sum(1 for collection in queued if collection)
+        message = 'Updated %d of %d collections in shard %d' % (
+            updated, collection_count, shard)
+        logging.info(message)
+        self.response.write({
+            'status': 200,
+            'message': message,
+            'total': collection_count,
+            'queued': updated,
+            'shard': shard,
+        })
+
+
 class ReshardWatches(TaskHandler):
     @ndb.tasklet
     def reshard_watch(self, watch): # pylint: disable=no-self-use
@@ -101,6 +140,7 @@ class UpdateWatches(TaskHandler):
 
 
 app = create_app([ # pylint: disable=invalid-name
+    Route('/tasks/watches/queue/collections', QueueActiveCollections),
     Route('/tasks/watches/reshard', ReshardWatches),
     Route('/<:batch|tasks>/watches/update', UpdateWatches),
 ])
