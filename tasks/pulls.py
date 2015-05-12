@@ -47,6 +47,7 @@ class QueueActiveIssues(TaskHandler):
         updated = sum(1 for issue in queued if issue)
         message = 'Queued issues for %d of %d pulls in shard %d' % (
             updated, pull_count, shard)
+        logging.info(message)
         self.response.write({
             'status': 200,
             'message': message,
