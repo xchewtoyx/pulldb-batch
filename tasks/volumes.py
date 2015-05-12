@@ -61,6 +61,7 @@ class RefreshBatch(TaskHandler):
     def __init__(self, *args, **kwargs):
         super(RefreshBatch, self).__init__(*args, **kwargs)
         self.cv_api = None
+        self.query = None
         self.varz = None
 
     @ndb.tasklet
@@ -74,7 +75,7 @@ class RefreshBatch(TaskHandler):
                 issue_dicts.extend(page)
         except DeadlineExceededError as err:
             logging.warn('Timeout fetching issues for volume %d [%r]',
-                          int(volume.identifier), err)
+                         int(volume.identifier), err)
             raise ndb.Return(None)
         except Exception as err:
             logging.warn(
@@ -121,30 +122,47 @@ class RefreshBatch(TaskHandler):
             yield volume.put_async()
         raise ndb.Return(volume_updated, len(new_issues))
 
+    @ndb.tasklet
+    def fetch_volume_page(self, batch_size, cursor):
+        clean_run = True
+        page_results, cursor, more = yield self.query.fetch_page_async(
+            batch_size, start_cursor=cursor)
+        if page_results:
+            try:
+                results = yield [
+                    self.check_volumes(volume)
+                    for volume in page_results
+                ]
+            except comicvine.ApiError as err:
+                logging.warn('Error while fetching comicvine data: %r', err)
+                clean_run = False
+                results = []
+        raise ndb.Return(results, clean_run, cursor, more)
+
+
     @VarzContext('volume_queue')
     def get(self):
         clean_run = True
         self.cv_api = comicvine.load()
-        volume_query = volumes.Volume.query(
+        self.query = volumes.Volume.query(
             volumes.Volume.complete == False
         )
-        incomplete_volumes = volume_query.count_async()
+        incomplete_volumes = self.query.count_async()
         limit = int(self.request.get('limit', 100))
         step = int(self.request.get('step', 10))
         logging.info('Refreshing %d volumes in batches of %d', limit, step)
         updates = 0
         new_issues = 0
+        cursor = None
         for offset in range(0, limit, step):
-            try:
-                batch_size = min([step, limit-offset])
-                results = volume_query.map(
-                    self.check_volumes, offset=offset, limit=batch_size)
-                updates += sum(1 for update, count in results if update)
-                new_issues += sum(count for update, count in results)
-            except comicvine.ApiError as err:
-                logging.warn('Error while fetching comicvine data: %r', err)
-                clean_run = False
+            batch_size = min([step, limit-offset])
+            batch_future = self.fetch_volume_page(batch_size, cursor)
+            results, clean_run, cursor, more = batch_future.get_result()
+            updates += sum(1 for update, count in results if update)
+            new_issues += sum(count for update, count in results)
+            if not (clean_run and more):
                 break
+
         self.varz.backlog = incomplete_volumes.get_result()
         self.varz.updates = updates
         self.varz.new_issues = new_issues

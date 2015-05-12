@@ -160,23 +160,44 @@ class RefreshBatch(TaskHandler):
         yield issue.put_async()
         raise ndb.Return(issue_updated)
 
+    @ndb.tasklet
+    def fetch_issue_page(self, batch_size, cursor):
+        clean_run = True
+        page_results, cursor, more = yield self.query.fetch_page_async(
+            batch_size, start_cursor=cursor)
+        if page_results:
+            try:
+                results = yield [
+                    self.refresh_issue(issue)
+                    for issue in page_results
+                ]
+            except comicvine.ApiError as err:
+                logging.warn('Error while fetching comicvine data: %r', err)
+                clean_run = False
+                results = []
+        raise ndb.Return(results, clean_run, cursor, more)
+
     @VarzContext('issue_queue')
     def get(self):
         # pylint: disable=unused-variable, attribute-defined-outside-init
         logging.info('Recursion limit: %d', sys.getrecursionlimit())
         self.cv_api = comicvine.load()
-        query = issues.Issue.query(
+        self.query = issues.Issue.query(
             issues.Issue.complete == False,
         )
-        issue_count = query.count_async()
+        issue_count = self.query.count_async()
         self.varz.update_count = 0
         limit = int(self.request.get('limit', 200))
         step = int(self.request.get('step', 50))
+        cursor = None
         for offset in range(0, limit, step):
             batch_limit = min([step, limit - offset])
-            updates = query.map(
-                self.refresh_issue, offset=offset, limit=batch_limit)
+            batch_future = self.fetch_issue_page(batch_limit, cursor)
+            updates, clean_run, cursor, more = batch_future.get_result()
             self.varz.update_count += sum(1 for updated in updates if updated)
+            if not (clean_run and more):
+                break
+
         self.varz.backlog = issue_count = issue_count.get_result()
         status = 'Updated %d of %d issues' % (
             self.varz.update_count, self.varz.backlog)
