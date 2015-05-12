@@ -65,16 +65,22 @@ class RefreshBatch(TaskHandler):
 
     @ndb.tasklet
     def find_new_issues(self, volume):
+        issue_dicts = []
         pages = []
         try:
             pages = yield self.cv_api.fetch_issue_batch_async(
                 [int(volume.identifier)], filter_attr='volume')
+            for page in pages:
+                issue_dicts.extend(page)
         except DeadlineExceededError as err:
-            logging.error('Timeout fetching issues for volume %d [%r]',
+            logging.warn('Timeout fetching issues for volume %d [%r]',
                           int(volume.identifier), err)
-        issue_dicts = []
-        for page in pages:
-            issue_dicts.extend(page)
+            raise ndb.Return(None)
+        except Exception as err:
+            logging.warn(
+                'unknown exception while checking %r for new issues: %r',
+                volume.key, err)
+            raise
         new_issues = []
         for issue in issue_dicts:
             issue_key = issues.issue_key(issue, create=True, batch=True)
@@ -86,13 +92,21 @@ class RefreshBatch(TaskHandler):
     @ndb.tasklet
     def check_volumes(self, volume):
         # pylint: disable=no-self-use,unused-variable
+        volume_dict = None
         try:
-            volume_dict = yield self.cv_api.fetch_volume_async(
-                int(volume.identifier))
+            # Use batch fetch for a single volume here as it excludes the
+            # expensive 'issues' key from the results.
+            volume_list = []
+            pages = yield self.cv_api.fetch_volume_batch_async(
+                [int(volume.identifier)])
+            for page in pages:
+                volume_list.extend(page)
+            if volume_list:
+                logging.info('Found volume: %r', volume_list)
+                volume_dict = volume_list[0]
         except DeadlineExceededError as err:
             logging.error('Timeout fetching volume %d [%r]',
                           int(volume.identifier), err)
-            volume_dict = None
         new_issues = []
         if not volume_dict:
             volume_updated = False
@@ -102,29 +116,35 @@ class RefreshBatch(TaskHandler):
             if volume_updated:
                 logging.debug('Volume %r updated', volume.key)
                 volume.apply_changes(volume_dict)
-            volume.complete = True
             new_issues = yield self.find_new_issues(volume)
+            volume.complete = True
             yield volume.put_async()
         raise ndb.Return(volume_updated, len(new_issues))
 
     @VarzContext('volume_queue')
     def get(self):
+        clean_run = True
         self.cv_api = comicvine.load()
         volume_query = volumes.Volume.query(
             volumes.Volume.complete == False
         )
         incomplete_volumes = volume_query.count_async()
-        limit = int(self.request.get('limit', 50))
+        limit = int(self.request.get('limit', 100))
         step = int(self.request.get('step', 10))
         logging.info('Refreshing %d volumes in batches of %d', limit, step)
         updates = 0
         new_issues = 0
         for offset in range(0, limit, step):
-            batch_size = min([step, limit-offset])
-            results = volume_query.map(
-                self.check_volumes, offset=offset, limit=batch_size)
-            updates += sum(1 for update, count in results if update)
-            new_issues += sum(count for update, count in results)
+            try:
+                batch_size = min([step, limit-offset])
+                results = volume_query.map(
+                    self.check_volumes, offset=offset, limit=batch_size)
+                updates += sum(1 for update, count in results if update)
+                new_issues += sum(count for update, count in results)
+            except comicvine.ApiError as err:
+                logging.warn('Error while fetching comicvine data: %r', err)
+                clean_run = False
+                break
         self.varz.backlog = incomplete_volumes.get_result()
         self.varz.updates = updates
         self.varz.new_issues = new_issues
@@ -135,6 +155,7 @@ class RefreshBatch(TaskHandler):
         self.response.write(json.dumps({
             'status': 200,
             'message': status,
+            'clean': clean_run,
         }))
 
 
@@ -259,8 +280,9 @@ class RefreshVolumes(TaskHandler):
         for volume_id in volume_detail:
             volume_key = ndb.Key('Volume', str(volume_id))
             logging.info('updating volume: %r', volume_key)
-            volume_data = cv_detail[volume_id]['volume_detail']
+            volume_data = {}
             try:
+                volume_data = cv_detail[volume_id]['volume_detail']
                 last_issue_key = ndb.Key(
                     'Issue', str(volume_data['last_issue']['id']))
             except KeyError:
@@ -269,20 +291,13 @@ class RefreshVolumes(TaskHandler):
                     volume_id, volume_data)
                 continue
             volume = volume_key.get()
-            if volume and (volume.last_issue != last_issue_key or
-                           not volume.last_issue_date):
-                last_issue = last_issue_key.get()
-                volume.last_issue = last_issue_key
-                try:
-                    volume.last_issue_date = last_issue.pubdate
-                except AttributeError:
-                    logging.warn(
-                        'Cannot update volume %r, last issue %r has no pubdate',
-                        volume, last_issue)
+            if volume:
+                # pylint: disable=unused-variable
+                volume_updated, last_update = volume.has_updates(volume_data)
+                if volume_updated:
+                    volume.apply_changes(volume_data)
+                volume.complete = True
                 volume.put_async()
-            else:
-                logging.info('not updating %r with %r',
-                             volume_key, volume_data)
 
         status = 'Updated %d volumes. Found %d new issues' % (
             len(sharded_ids), len(new_issues))
