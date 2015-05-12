@@ -33,10 +33,9 @@ class QueueArcs(TaskHandler):
                 Setting.name == 'arc_shard_count').get()
             current_hour = time.time() // 3600
             logging.info('Current hour: %d, Shard Count: %r',
-                         current_hour, shard_count)
+                         current_hour, shard_count.value)
             shard = int(time.time() // 3600) % int(shard_count.value)
-        logmsg = 'marking arcs in shard %s for refresh'
-        logging.info(logmsg, shard)
+        logging.info('Marking arcs in shard %s for refresh', shard)
 
         return shard
 
@@ -105,7 +104,7 @@ class RefreshArcs(TaskHandler):
             arcs.StoryArc.complete == False
         )
         incomplete_arcs = arc_query.count_async()
-        results = arc_query.map(self.check_arcs, limit=30)
+        results = arc_query.map(self.check_arcs, limit=50)
         updates = sum(1 for update, count in results if update)
         new_issues = sum(count for update, count in results)
         self.varz.backlog = incomplete_arcs.get_result()
