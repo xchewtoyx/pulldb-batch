@@ -66,7 +66,7 @@ class FetchNew(TaskHandler):
                 filter_attr='date_added',
                 deadline=60
             )
-        except (cv_api.ApiError, DeadlineExceededError) as err:
+        except (comicvine.ApiError, DeadlineExceededError) as err:
             logging.warn("Error fetching new issues %r", err)
             new_issues = []
         # Fixup for sometimes getting 'number_of_page_results' mixed into
@@ -136,11 +136,18 @@ class RequeueShard(TaskHandler):
 class RefreshBatch(TaskHandler):
     @ndb.tasklet
     def refresh_issue(self, issue):
+        issue_dict = {}
         try:
             issue_dict = yield self.cv_api.fetch_issue_async(
                 int(issue.key.id()))
         except DeadlineExceededError as err:
-            issue_dict = None
+            logging.warn('Timeout fetching issue %r: %r',
+                         issue.key, err)
+            raise ndb.Return(None)
+        except Exception as err:
+            logging.warn('Unknown exception fetching issue %r: %r',
+                         issue.key, err)
+            raise
         if not issue_dict:
             issue_updated = False
             logging.warn('Cannot update issue: %r', issue_dict)
@@ -163,10 +170,12 @@ class RefreshBatch(TaskHandler):
         )
         issue_count = query.count_async()
         self.varz.update_count = 0
-        limit = int(self.request.get('limit', 150))
+        limit = int(self.request.get('limit', 200))
         step = int(self.request.get('step', 50))
         for offset in range(0, limit, step):
-            updates = query.map(self.refresh_issue, offset=offset, limit=step)
+            batch_limit = min([step, limit - offset])
+            updates = query.map(
+                self.refresh_issue, offset=offset, limit=batch_limit)
             self.varz.update_count += sum(1 for updated in updates if updated)
         self.varz.backlog = issue_count = issue_count.get_result()
         status = 'Updated %d of %d issues' % (
