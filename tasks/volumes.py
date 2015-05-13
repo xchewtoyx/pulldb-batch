@@ -65,12 +65,11 @@ class RefreshBatch(TaskHandler):
         self.varz = None
 
     @ndb.tasklet
-    def find_new_issues(self, volume):
+    def create_new_issues(self, issue_ids):
         issue_dicts = []
-        pages = []
         try:
             pages = yield self.cv_api.fetch_issue_batch_async(
-                [int(volume.identifier)], filter_attr='volume')
+                issue_ids)
             for page in pages:
                 issue_dicts.extend(page)
         except DeadlineExceededError as err:
@@ -84,10 +83,39 @@ class RefreshBatch(TaskHandler):
             raise
         new_issues = []
         for issue in issue_dicts:
-            issue_key = issues.issue_key(issue, create=True, batch=True)
-            if isinstance(issue_key, Future):
-                new_issues.append(issue_key)
-        issue_keys = yield new_issues
+            issue_future = issues.issue_key(
+                issue, create=True, batch=True)
+            if isinstance(issue_future, Future):
+                new_issues.append(issue_future)
+        new_issues = yield new_issues
+        raise ndb.Return(new_issues)
+
+    @ndb.tasklet
+    def find_new_issues(self, volume):
+        issue_dicts = []
+        pages = []
+        try:
+            pages = yield self.cv_api.fetch_issue_batch_async(
+                [int(volume.identifier)], filter_attr='volume',
+                field_list='id'
+            )
+            for page in pages:
+                issue_dicts.extend(page)
+        except DeadlineExceededError as err:
+            logging.warn('Timeout fetching issues for volume %d [%r]',
+                         int(volume.identifier), err)
+            raise ndb.Return(None)
+        except Exception as err:
+            logging.warn(
+                'unknown exception while checking %r for new issues: %r',
+                volume.key, err)
+            raise
+        new_issues = []
+        for issue in issue_dicts:
+            issue_key = issues.issue_key(str(issue['id']), create=False)
+            if not issue_key:
+                new_issues.append(issue['id'])
+        issue_keys = yield self.create_new_issues(new_issues)
         raise ndb.Return(issue_keys)
 
     @ndb.tasklet
@@ -157,9 +185,14 @@ class RefreshBatch(TaskHandler):
         for offset in range(0, limit, step):
             batch_size = min([step, limit-offset])
             batch_future = self.fetch_volume_page(batch_size, cursor)
-            results, clean_run, cursor, more = batch_future.get_result()
-            updates += sum(1 for update, count in results if update)
-            new_issues += sum(count for update, count in results)
+            try:
+                results, clean_run, cursor, more = batch_future.get_result()
+            except (comicvine.ApiError, DeadlineExceededError) as err:
+                logging.warn('Error while fetching batch: %r', err)
+                clean_run = False
+            else:
+                updates += sum(1 for update, count in results if update)
+                new_issues += sum(count for update, count in results)
             if not (clean_run and more):
                 break
 
