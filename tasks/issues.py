@@ -189,11 +189,19 @@ class RefreshBatch(TaskHandler):
         limit = int(self.request.get('limit', 200))
         step = int(self.request.get('step', 50))
         cursor = None
+        more = None
         for offset in range(0, limit, step):
             batch_limit = min([step, limit - offset])
             batch_future = self.fetch_issue_page(batch_limit, cursor)
-            updates, clean_run, cursor, more = batch_future.get_result()
-            self.varz.update_count += sum(1 for updated in updates if updated)
+            try:
+                updates, clean_run, cursor, more = batch_future.get_result()
+            except (comicvine.ApiError, DeadlineExceededError) as err:
+                logging.warn('Error fetching issue batch at offset %d: %r',
+                             offset, err)
+                clean_run = False
+            else:
+                self.varz.update_count += sum(
+                    1 for updated in updates if updated)
             if not (clean_run and more):
                 break
 
