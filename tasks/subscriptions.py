@@ -37,6 +37,7 @@ class QueueActiveVolumes(TaskHandler):
         #            by the subscription refresh task
         query = subscriptions.Subscription.query(
             subscriptions.Subscription.shard == shard,
+            subscriptions.Subscription.fresh == True
         )
         count_future = query.count_async()
         queued = query.map(self.queue_collections)
@@ -59,7 +60,7 @@ class RefreshSubscription(TaskHandler):
     def check_freshness(self, subscription):
         changed = False
         issue_query = issues.Issue.query(
-            issues.Issue.volume == subscription.volume
+            issues.Issue.volume == subscription.volume,
         ).order(-issues.Issue.pubdate)
         last_issue = yield issue_query.get_async()
         logging.debug('Most recent pull for %r is %r[%s]',
@@ -98,7 +99,7 @@ class RefreshSubscription(TaskHandler):
     def get(self):
         shard = self.active_shard()
         query = subscriptions.Subscription.query(
-            subscriptions.Subscription.shard == shard
+            subscriptions.Subscription.shard == shard,
         )
         shard_count = query.count_async()
         updates = query.map(self.refresh_subscription)
