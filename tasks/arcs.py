@@ -61,15 +61,27 @@ class RefreshArcs(TaskHandler):
         issue_dicts = []
         # Limit to 200 filter ids at a time
         for index in range(0, len(issue_list), 200):
-            pages = yield self.cv_api.fetch_issue_batch_async(
-                issue_ids[index:index+200])
-            for page in pages:
-                issue_dicts.extend(page)
+            try:
+                pages = yield self.cv_api.fetch_issue_batch_async(
+                    issue_ids[index:index+200])
+            except (comicvine.ApiError, DeadlineExceededError) as err:
+                logging.warn('Caught error while fetching issues: %r',
+                             err)
+                break
+            else:
+                for page in pages:
+                    issue_dicts.extend(page)
         new_issues = []
         for issue in issue_dicts:
-            issue_key = issues.issue_key(issue, create=True, batch=True)
-            if isinstance(issue_key, Future):
-                new_issues.append(issue_key)
+            try:
+                issue_key = issues.issue_key(issue, create=True, batch=True)
+            except (comicvine.ApiError, DeadlineExceededError) as err:
+                logging.warn('Caught error while creating issue[%r]: %r',
+                             issue, err)
+                break
+            else:
+                if isinstance(issue_key, Future):
+                    new_issues.append(issue_key)
         issue_keys = yield new_issues
         raise ndb.Return(issue_keys)
 
