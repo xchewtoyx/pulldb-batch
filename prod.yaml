@@ -2,7 +2,7 @@ application: comic-pull-db
 module: batch
 version: live
 runtime: python27
-instance_class: B1
+instance_class: B2
 api_version: 1
 threadsafe: true
 basic_scaling:
