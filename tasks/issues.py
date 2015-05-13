@@ -38,8 +38,7 @@ class FetchNew(TaskHandler):
             issue.update(issue_detail)
         arc_list = issue.get('story_arc_credits', [])
         arc_keys = [arcs.arc_key(arc, create=False) for arc in arc_list]
-        collections = yield ndb.get_multi_async(arc_keys)
-        raise ndb.Return(issue, any(collections))
+        raise ndb.Return(issue, any(arc_keys))
 
     def check_batch(self, issue_batch):
         issue_futures = [self.check_issue(issue) for issue in issue_batch]
