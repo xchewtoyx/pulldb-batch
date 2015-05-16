@@ -66,6 +66,7 @@ class RefreshBatch(TaskHandler):
 
     @ndb.tasklet
     def create_new_issues(self, issue_ids):
+        logging.info('Creating issues: %r', issue_ids)
         issue_dicts = []
         try:
             pages = yield self.cv_api.fetch_issue_batch_async(
@@ -87,7 +88,9 @@ class RefreshBatch(TaskHandler):
                 issue, create=True, batch=True)
             if isinstance(issue_future, Future):
                 new_issues.append(issue_future)
+        logging.debug('Waiting on issues: %r', new_issues)
         new_issues = yield new_issues
+        logging.debug('Issues batch created: %r', new_issues)
         raise ndb.Return(new_issues)
 
     @ndb.tasklet
@@ -99,8 +102,6 @@ class RefreshBatch(TaskHandler):
                 [int(volume.identifier)], filter_attr='volume',
                 field_list='id'
             )
-            for page in pages:
-                issue_dicts.extend(page)
         except DeadlineExceededError as err:
             logging.warn('Timeout fetching issues for volume %d [%r]',
                          int(volume.identifier), err)
@@ -110,21 +111,23 @@ class RefreshBatch(TaskHandler):
                 'unknown exception while checking %r for new issues: %r',
                 volume.key, err)
             raise
+        else:
+            for page in pages:
+                issue_dicts.extend(page)
         new_issues = []
         for issue in issue_dicts:
             issue_key = issues.issue_key(issue, create=False)
             if not issue_key:
                 new_issues.append(issue['id'])
+        issue_keys = []
         if new_issues:
             new_issue_futures = []
             for offset in range(0, len(new_issues), 200):
-                issue_futures.append(
+                new_issue_futures.append(
                     self.create_new_issues(new_issues[offset:offset+200]))
-                issue_slices = yield issue_futures
+            issue_slices = yield new_issue_futures
             for issue_list in issue_slices:
                 issue_keys.extend(issue_list)
-        else:
-            issue_keys = []
         raise ndb.Return(issue_keys)
 
     @ndb.tasklet
@@ -154,9 +157,14 @@ class RefreshBatch(TaskHandler):
             if volume_updated:
                 logging.debug('Volume %r updated', volume.key)
                 volume.apply_changes(volume_dict)
-            new_issues = yield self.find_new_issues(volume)
-            volume.complete = True
-            yield volume.put_async()
+            try:
+                new_issues = yield self.find_new_issues(volume)
+            except DeadlineExceededError as err:
+                logging.warn('Timeout in check_volumes(%r): %r',
+                             volume.key, err)
+            else:
+                volume.complete = True
+                yield volume.put_async()
         raise ndb.Return(volume_updated, len(new_issues))
 
     @ndb.tasklet
