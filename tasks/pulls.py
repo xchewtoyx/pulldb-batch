@@ -1,3 +1,4 @@
+# pylint: disable=missing-docstring
 from datetime import datetime
 import json
 import logging
@@ -6,16 +7,11 @@ from zlib import crc32
 
 from google.appengine.ext import ndb
 
-# pylint: disable=F0401
 from pulldb.base import create_app, Route, TaskHandler
 from pulldb.models.admin import Setting
 from pulldb.models.base import model_to_dict
 from pulldb.models import pulls
 from pulldb.models import streams
-from pulldb.models import subscriptions
-from pulldb.models import volumes
-
-# pylint: disable=W0232,C0103,E1101,R0201,R0903
 
 class QueueActiveIssues(TaskHandler):
     @ndb.tasklet
@@ -173,16 +169,6 @@ class Refresh(TaskHandler):
                          pull.key, pull.name, issue.name)
             pull.name = issue.name
             changed = True
-        if pull.volume and not pull.subscription:
-            logging.info('Adding missing subscription to pull %r', pull.key)
-            query = subscriptions.Subscription.query(
-                subscriptions.Subscription.volume == pull.volume,
-                ancestor=pull.key.parent()
-            )
-            subscription = yield query.get_async()
-            if subscription:
-                pull.subscription = subscription.key
-                changed = True
         if pull.volume and not pull.publisher:
             logging.info('Adding missing publisher to pull %r', pull.key)
             volume = yield pull.volume.get_async()
@@ -210,10 +196,14 @@ class Refresh(TaskHandler):
         results = query.map(self.refresh_pull)
         update_count = sum(1 for pull in results if pull)
         message = '%d of %d pulls refreshed' % (update_count, len(results))
+        logging.info(message)
         self.response.write(json.dumps({
             'status': 200,
-            'message': ' refreshed',
+            'message': message,
             'results': [pull for pull in results if pull],
+            'updates': update_count,
+            'total': len(results),
+            'shard': shard,
         }))
 
 class Validate(TaskHandler):
