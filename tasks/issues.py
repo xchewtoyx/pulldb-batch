@@ -184,7 +184,7 @@ class RefreshBatch(TaskHandler):
             issue.apply_changes(issue_dict)
         volume = yield issue.volume.get_async()
         if not volume:
-            volume_key = self.check_volume(issue)
+            volume_key = yield self.check_volume(issue)
             if volume_key:
                 issue.volume = volume_key
         issue.complete = True
