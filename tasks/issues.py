@@ -10,6 +10,7 @@ from zlib import crc32
 from google.appengine.api import search
 from google.appengine.api.urlfetch_errors import DeadlineExceededError
 from google.appengine.ext import ndb
+from google.appengine.ext.ndb.tasklets import Future
 
 from pulldb.base import Route, TaskHandler, create_app
 from pulldb.models.admin import Setting
@@ -20,6 +21,10 @@ from pulldb.models import volumes
 from pulldb.varz import VarzContext
 
 class FetchNew(TaskHandler):
+    def __init__(self, *args, **kwargs):
+        super(FetchNew, self).__init__(*args, **kwargs)
+        self.cv_api = comicvine.load()
+
     @ndb.tasklet
     def check_issue(self, issue):
         issue_key = issues.issue_key(issue, create=False)
@@ -56,7 +61,6 @@ class FetchNew(TaskHandler):
 
     @ndb.toplevel
     def get(self):
-        self.cv_api = comicvine.load()
         today = date.today()
         yesterday = today - timedelta(1)
         try:
@@ -133,6 +137,28 @@ class RequeueShard(TaskHandler):
         }))
 
 class RefreshBatch(TaskHandler):
+    def __init__(self, *args, **kwargs):
+        super(RefreshBatch, self).__init__(*args, **kwargs)
+        self.cv_api = comicvine.load()
+        self.varz = None
+
+    @ndb.tasklet
+    def check_volume(self, issue):
+        volume_key = issue.volume
+        logging.info('Retrieving volume info for %r', volume_key)
+        try:
+            volume_dict = yield self.cv_api.fetch_volume_async(
+                int(volume_key.id()))
+        except DeadlineExceededError as err:
+            logging.warn('Timeout fetching volume %r: %r',
+                         volume_key, err)
+            raise ndb.Return(None)
+        new_volume = volumes.volume_key(
+            volume_dict, create=True, batch=True)
+        if isinstance(new_volume, Future):
+            volume_key = yield new_volume
+            raise ndb.Return(volume_key)
+
     @ndb.tasklet
     def refresh_issue(self, issue):
         issue_dict = {}
@@ -151,10 +177,16 @@ class RefreshBatch(TaskHandler):
             issue_updated = False
             logging.warn('Cannot update issue: %r', issue_dict)
             raise ndb.Return(None)
+        # pylint: disable=unused-variable
         issue_updated, last_update = issue.has_updates(issue_dict)
         if issue_updated:
             logging.debug('Issue %r updated', issue.key)
             issue.apply_changes(issue_dict)
+        volume = yield issue.volume.get_async()
+        if not volume:
+            volume_key = self.check_volume(issue)
+            if volume_key:
+                issue.volume = volume_key
         issue.complete = True
         yield issue.put_async()
         raise ndb.Return(issue_updated)
@@ -180,7 +212,6 @@ class RefreshBatch(TaskHandler):
     def get(self):
         # pylint: disable=unused-variable, attribute-defined-outside-init
         logging.info('Recursion limit: %d', sys.getrecursionlimit())
-        self.cv_api = comicvine.load()
         self.query = issues.Issue.query(
             issues.Issue.complete == False,
         )
