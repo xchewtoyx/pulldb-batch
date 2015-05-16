@@ -202,7 +202,7 @@ class RefreshBatch(TaskHandler):
                     self.refresh_issue(issue)
                     for issue in page_results
                 ]
-            except comicvine.ApiError as err:
+            except (DeadlineExceededError, comicvine.ApiError) as err:
                 logging.warn('Error while fetching comicvine data: %r', err)
                 clean_run = False
                 results = []
