@@ -112,10 +112,13 @@ class RefreshBatch(TaskHandler):
             raise
         new_issues = []
         for issue in issue_dicts:
-            issue_key = issues.issue_key(str(issue['id']), create=False)
+            issue_key = issues.issue_key(issue, create=False)
             if not issue_key:
                 new_issues.append(issue['id'])
-        issue_keys = yield self.create_new_issues(new_issues)
+        if new_issues:
+            issue_keys = yield self.create_new_issues(new_issues)
+        else:
+            issue_keys = []
         raise ndb.Return(issue_keys)
 
     @ndb.tasklet
