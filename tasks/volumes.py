@@ -116,7 +116,13 @@ class RefreshBatch(TaskHandler):
             if not issue_key:
                 new_issues.append(issue['id'])
         if new_issues:
-            issue_keys = yield self.create_new_issues(new_issues)
+            new_issue_futures = []
+            for offset in range(0, len(new_issues), 200):
+                issue_futures.append(
+                    self.create_new_issues(new_issues[offset:offset+200]))
+                issue_slices = yield issue_futures
+            for issue_list in issue_slices:
+                issue_keys.extend(issue_list)
         else:
             issue_keys = []
         raise ndb.Return(issue_keys)
