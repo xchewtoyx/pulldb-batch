@@ -145,8 +145,8 @@ class RefreshBatch(TaskHandler):
             if volume_list:
                 logging.info('Found volume: %r', volume_list)
                 volume_dict = volume_list[0]
-        except DeadlineExceededError as err:
-            logging.error('Timeout fetching volume %d [%r]',
+        except (ApiError, DeadlineExceededError) as err:
+            logging.error('Error fetching volume %d [%r]',
                           int(volume.identifier), err)
         new_issues = []
         if not volume_dict:
@@ -159,8 +159,8 @@ class RefreshBatch(TaskHandler):
                 volume.apply_changes(volume_dict)
             try:
                 new_issues = yield self.find_new_issues(volume)
-            except DeadlineExceededError as err:
-                logging.warn('Timeout in check_volumes(%r): %r',
+            except (ApiError, DeadlineExceededError) as err:
+                logging.warn('Error in check_volumes(%r): %r',
                              volume.key, err)
             else:
                 volume.complete = True
