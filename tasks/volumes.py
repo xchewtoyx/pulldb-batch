@@ -145,7 +145,7 @@ class RefreshBatch(TaskHandler):
             if volume_list:
                 logging.info('Found volume: %r', volume_list)
                 volume_dict = volume_list[0]
-        except (ApiError, DeadlineExceededError) as err:
+        except (comicvine.ApiError, DeadlineExceededError) as err:
             logging.error('Error fetching volume %d [%r]',
                           int(volume.identifier), err)
         new_issues = []
@@ -159,7 +159,7 @@ class RefreshBatch(TaskHandler):
                 volume.apply_changes(volume_dict)
             try:
                 new_issues = yield self.find_new_issues(volume)
-            except (ApiError, DeadlineExceededError) as err:
+            except (comicvine.ApiError, DeadlineExceededError) as err:
                 logging.warn('Error in check_volumes(%r): %r',
                              volume.key, err)
             else:
