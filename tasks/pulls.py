@@ -133,7 +133,7 @@ class StreamSelect(TaskHandler):
         if self.request.get('shard'):
             shard = int(self.request.get('shard'))
         query = pulls.Pull.query(
-            pulls.Pull.pulled == True,
+            pulls.Pull.ignored == False,
             pulls.Pull.read == False,
             pulls.Pull.shard == shard,
         )
