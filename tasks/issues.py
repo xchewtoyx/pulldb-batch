@@ -194,18 +194,18 @@ class RefreshBatch(TaskHandler):
     @ndb.tasklet
     def fetch_issue_page(self, batch_size, cursor):
         clean_run = True
-        page_results, cursor, more = yield self.query.fetch_page_async(
-            batch_size, start_cursor=cursor)
-        if page_results:
-            try:
+        try:
+            page_results, cursor, more = yield self.query.fetch_page_async(
+                batch_size, start_cursor=cursor)
+            if page_results:
                 results = yield [
                     self.refresh_issue(issue)
                     for issue in page_results
                 ]
-            except (DeadlineExceededError, comicvine.ApiError) as err:
-                logging.warn('Error while fetching comicvine data: %r', err)
-                clean_run = False
-                results = []
+        except (DeadlineExceededError, comicvine.ApiError) as err:
+            logging.warn('Error while fetching comicvine data: %r', err)
+            clean_run = False
+            results = []
         raise ndb.Return(results, clean_run, cursor, more)
 
     @VarzContext('issue_queue')
