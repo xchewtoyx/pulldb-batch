@@ -116,11 +116,8 @@ class RefreshWatches(TaskHandler):
 
 class ReshardWatches(TaskHandler):
     @ndb.tasklet
-    def reshard_watch(self, watch): # pylint: disable=no-self-use
+    def reshard_watch(self, shard_count, watch): # pylint: disable=no-self-use
         changed = False
-        shard_key = admin.Setting.query(
-            admin.Setting.name == 'watch_shard_count').get()
-        shard_count = int(shard_key.value)
         seed = crc32(watch.key.urlsafe())
         if seed % shard_count != watch.shard:
             watch.shard = seed % shard_count
@@ -130,8 +127,12 @@ class ReshardWatches(TaskHandler):
             raise ndb.Return(update)
 
     def get(self):
+        shard_key = admin.Setting.query(
+            admin.Setting.name == 'watch_shard_count').get()
+        shard_count = int(shard_key.value)
         query = subscriptions.WatchList.query()
-        updates = query.map(self.reshard_watch)
+        callback = partial(self.reshard_watch, shard_count)
+        updates = query.map(callback)
         update_count = sum(1 for update in updates if update)
         message = 'Resharded %d of %d watches' % (
             update_count, len(updates)

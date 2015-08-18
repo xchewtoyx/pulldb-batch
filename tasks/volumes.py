@@ -193,7 +193,7 @@ class RefreshBatch(TaskHandler):
             volumes.Volume.complete == False
         )
         incomplete_volumes = self.query.count_async()
-        limit = int(self.request.get('limit', 100))
+        limit = int(self.request.get('limit', 40))
         step = int(self.request.get('step', 10))
         logging.info('Refreshing %d volumes in batches of %d', limit, step)
         updates = 0
@@ -213,7 +213,10 @@ class RefreshBatch(TaskHandler):
             if not (clean_run and more):
                 break
 
-        self.varz.backlog = incomplete_volumes.get_result()
+        try:
+            self.varz.backlog = incomplete_volumes.get_result()
+        except DeadlineExceededError as err:
+            logging.warn('Deadline exceeded error: %r', err)
         self.varz.updates = updates
         self.varz.new_issues = new_issues
 

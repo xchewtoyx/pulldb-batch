@@ -217,7 +217,7 @@ class RefreshBatch(TaskHandler):
         )
         issue_count = self.query.count_async()
         self.varz.update_count = 0
-        limit = int(self.request.get('limit', 200))
+        limit = int(self.request.get('limit', 150))
         step = int(self.request.get('step', 50))
         cursor = None
         more = None
