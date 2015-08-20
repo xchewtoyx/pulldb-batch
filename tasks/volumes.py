@@ -184,7 +184,6 @@ class RefreshBatch(TaskHandler):
                 results = []
         raise ndb.Return(results, clean_run, cursor, more)
 
-
     @VarzContext('volume_queue')
     def get(self):
         clean_run = True
@@ -193,7 +192,7 @@ class RefreshBatch(TaskHandler):
             volumes.Volume.complete == False
         )
         incomplete_volumes = self.query.count_async()
-        limit = int(self.request.get('limit', 40))
+        limit = int(self.request.get('limit', 60))
         step = int(self.request.get('step', 10))
         logging.info('Refreshing %d volumes in batches of %d', limit, step)
         updates = 0
