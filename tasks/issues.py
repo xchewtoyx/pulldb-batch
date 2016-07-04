@@ -149,8 +149,8 @@ class RefreshBatch(TaskHandler):
         try:
             volume_dict = yield self.cv_api.fetch_volume_async(
                 int(volume_key.id()))
-        except DeadlineExceededError as err:
-            logging.warn('Timeout fetching volume %r: %r',
+        except (DeadlineExceededError, comicvine.ApiError) as err:
+            logging.warn('Error fetching volume %r: %r',
                          volume_key, err)
             raise ndb.Return(None)
         new_volume = volumes.volume_key(
@@ -169,6 +169,10 @@ class RefreshBatch(TaskHandler):
             logging.warn('Timeout fetching issue %r: %r',
                          issue.key, err)
             raise ndb.Return(None)
+        except comicvine.ApiError as err:
+            logging.warn('Comicvine Api Error fetching issue %r: %r',
+                         issue.key, err)
+            raise ndb.Return(None)
         except Exception as err:
             logging.warn('Unknown exception fetching issue %r: %r',
                          issue.key, err)
@@ -182,11 +186,15 @@ class RefreshBatch(TaskHandler):
         if issue_updated:
             logging.debug('Issue %r updated', issue.key)
             issue.apply_changes(issue_dict)
-        volume = yield issue.volume.get_async()
-        if not volume:
-            volume_key = yield self.check_volume(issue)
-            if volume_key:
-                issue.volume = volume_key
+        try:
+            volume = yield issue.volume.get_async()
+            if not volume:
+                volume_key = yield self.check_volume(issue)
+                if volume_key:
+                    issue.volume = volume_key
+        except (DeadlineExceededError, comicvine.ApiError) as err:
+            logging.warn('Error checking volume %r for issue %r: %r',
+                         issue.volume, issue.key, err)
         issue.complete = True
         yield issue.put_async()
         raise ndb.Return(issue_updated)
@@ -222,6 +230,8 @@ class RefreshBatch(TaskHandler):
         cursor = None
         more = None
         for offset in range(0, limit, step):
+            logging.info('Fetching issue batch: %d@%d/%d',
+                         step, offset, limit)
             batch_limit = min([step, limit - offset])
             batch_future = self.fetch_issue_page(batch_limit, cursor)
             try:
