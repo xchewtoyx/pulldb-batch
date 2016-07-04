@@ -179,6 +179,18 @@ class Refresh(TaskHandler):
             logging.info('Marking read pull %r as pulled', pull.key)
             pull.pulled = True
             changed = True
+        if pull.collection and issue.collection:
+            if sorted(pull.collection) != sorted(issue.collection):
+                logging.info('Updating collections for %r: %r -> %r',
+                             pull.key, pull.collection, issue.collection)
+                pull.collection = issue.collection
+                changed = True
+        else:
+            if pull.collection != issue.collection:
+                logging.info('Updating collections for %r: %r -> %r',
+                             pull.key, pull.collection, issue.collection)
+                pull.collection = issue.collection
+                changed = True
         if changed:
             yield pull.put_async()
             raise ndb.Return({
